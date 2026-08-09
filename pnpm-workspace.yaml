@@ -1,0 +1,21 @@
+packages:
+  - "."
+
+# Nest 12 prereleases may still advertise stale sibling peer ranges.
+peerDependencyRules:
+  allowedVersions:
+    "@nestjs/common": "12"
+    "@nestjs/core": "12"
+
+# These packages do not need lifecycle builds in this workspace.
+allowBuilds:
+  "@nestjs/core": false
+  "@swc/core": false
+  "esbuild": false
+  protobufjs: false
+
+# A failed OIDC attestation must fail a release.
+provenance: true
+
+minimumReleaseAgeExclude:
+  - "@nestm/tenant@0.1.0-alpha.3"

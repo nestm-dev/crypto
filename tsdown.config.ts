@@ -1,0 +1,35 @@
+import { defineConfig } from "tsdown";
+
+export default defineConfig({
+	entry: [
+		"src/index.ts",
+		"src/core/index.ts",
+		"src/fields/index.ts",
+		"src/tenant/index.ts",
+		"src/key-wrap/rsa/index.ts",
+		"src/kms/aws/index.ts",
+		"src/kms/gcp/index.ts",
+		"src/kms/azure/index.ts",
+		"src/testing/index.ts",
+	],
+	format: ["esm"],
+	platform: "node",
+	target: "node22",
+	dts: true,
+	sourcemap: false,
+	clean: true,
+	fixedExtension: true,
+	treeshake: true,
+	deps: {
+		neverBundle: [
+			/^@nestjs\//,
+			/^@nestm\/tenant(?:\/|$)/,
+			/^@aws-sdk\/client-kms(?:\/|$)/,
+			/^@google-cloud\/kms(?:\/|$)/,
+			/^@azure\/core-auth(?:\/|$)/,
+			/^@azure\/keyvault-keys(?:\/|$)/,
+			"reflect-metadata",
+			"rxjs",
+		],
+	},
+});

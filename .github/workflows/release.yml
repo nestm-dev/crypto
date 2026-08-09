@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+concurrency: release-${{ github.ref }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: pnpm/setup@v2
+        with: { install: false }
+      # npm Trusted Publishing uses the job's OIDC token.
+      - uses: actions/setup-node@v7
+        with: { node-version: 24, cache: pnpm }
+      - name: Require pnpm with native OIDC publishing
+        run: >-
+          node -e 'const [a,b]=require("child_process").execSync("pnpm --version").toString().trim().split(".").map(Number);if(a<11||(a===11&&b<11))throw new Error("pnpm >=11.11 required")'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run verify
+      - name: Create release PR or publish
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          publish: pnpm run release
+          version: pnpm run version-packages
+          title: "chore: release @nestm/crypto"
+          commit: "chore: release @nestm/crypto"
+          createGithubReleases: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Reconcile git tag with npm
+        if: steps.changesets.outputs.published == 'true'
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="@nestm/crypto@$VERSION"
+          if npm view "@nestm/crypto@$VERSION" version > /dev/null 2>&1; then
+            git tag "$TAG" 2> /dev/null && git push origin "$TAG" || true
+          fi

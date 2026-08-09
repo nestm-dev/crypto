@@ -1,0 +1,182 @@
+{
+	"name": "@nestm/crypto",
+	"version": "0.1.0-alpha.0",
+	"description": "Authenticated encryption for NestJS 12 with AES-256-GCM, envelope key providers, field helpers, and tenant isolation.",
+	"license": "MIT",
+	"author": "nestm",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nestm-dev/crypto.git"
+	},
+	"homepage": "https://github.com/nestm-dev/crypto#readme",
+	"bugs": {
+		"url": "https://github.com/nestm-dev/crypto/issues"
+	},
+	"keywords": [
+		"nestjs",
+		"nestjs-12",
+		"cryptography",
+		"encryption",
+		"aes-256-gcm",
+		"envelope-encryption",
+		"kms",
+		"multi-tenant",
+		"esm",
+		"nestm"
+	],
+	"type": "module",
+	"sideEffects": false,
+	"engines": {
+		"node": ">=22.13.0"
+	},
+	"packageManager": "pnpm@11.20.0",
+	"main": "./dist/index.mjs",
+	"types": "./dist/index.d.mts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs",
+			"default": "./dist/index.mjs"
+		},
+		"./core": {
+			"types": "./dist/core/index.d.mts",
+			"import": "./dist/core/index.mjs",
+			"default": "./dist/core/index.mjs"
+		},
+		"./fields": {
+			"types": "./dist/fields/index.d.mts",
+			"import": "./dist/fields/index.mjs",
+			"default": "./dist/fields/index.mjs"
+		},
+		"./tenant": {
+			"types": "./dist/tenant/index.d.mts",
+			"import": "./dist/tenant/index.mjs",
+			"default": "./dist/tenant/index.mjs"
+		},
+		"./key-wrap/rsa": {
+			"types": "./dist/key-wrap/rsa/index.d.mts",
+			"import": "./dist/key-wrap/rsa/index.mjs",
+			"default": "./dist/key-wrap/rsa/index.mjs"
+		},
+		"./kms/aws": {
+			"types": "./dist/kms/aws/index.d.mts",
+			"import": "./dist/kms/aws/index.mjs",
+			"default": "./dist/kms/aws/index.mjs"
+		},
+		"./kms/gcp": {
+			"types": "./dist/kms/gcp/index.d.mts",
+			"import": "./dist/kms/gcp/index.mjs",
+			"default": "./dist/kms/gcp/index.mjs"
+		},
+		"./kms/azure": {
+			"types": "./dist/kms/azure/index.d.mts",
+			"import": "./dist/kms/azure/index.mjs",
+			"default": "./dist/kms/azure/index.mjs"
+		},
+		"./testing": {
+			"types": "./dist/testing/index.d.mts",
+			"import": "./dist/testing/index.mjs",
+			"default": "./dist/testing/index.mjs"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist",
+		"README.md",
+		"LICENSE",
+		"CHANGELOG.md",
+		"CONTRIBUTING.md",
+		"SECURITY.md"
+	],
+	"publishConfig": {
+		"access": "public"
+	},
+	"scripts": {
+		"clean": "node scripts/clean.mjs",
+		"build": "tsdown",
+		"build:watch": "tsdown --watch src",
+		"build:tsc": "pnpm run clean && tsc -p tsconfig.build.json",
+		"typecheck": "tsc --noEmit",
+		"lint": "oxlint --type-aware .",
+		"lint:fix": "oxlint --type-aware --fix .",
+		"format": "prettier --write . --ignore-unknown",
+		"format:check": "prettier --check . --ignore-unknown",
+		"check": "pnpm run lint && pnpm run format:check && pnpm run typecheck",
+		"test": "pnpm run test:unit",
+		"test:unit": "vitest run --config vitest.config.ts",
+		"test:watch": "vitest --config vitest.config.ts",
+		"test:coverage": "vitest run --config vitest.config.ts --coverage",
+		"test:live": "vitest run --config vitest.live.config.ts",
+		"test:packed": "node scripts/test-packed-consumers.mjs",
+		"verify:package": "node scripts/check-package.mjs && publint --strict && attw --pack . --profile esm-only",
+		"verify:pack": "pnpm run build && pnpm run verify:package && pnpm run test:packed",
+		"verify": "pnpm run check && pnpm run test && pnpm run verify:pack",
+		"prepack": "pnpm run build",
+		"changeset": "changeset",
+		"version-packages": "changeset version",
+		"release": "node scripts/publish.mjs"
+	},
+	"peerDependencies": {
+		"@aws-sdk/client-kms": ">=3.700.0 <4",
+		"@azure/core-auth": ">=1.11.0 <2",
+		"@azure/keyvault-keys": ">=4.10.2 <5",
+		"@google-cloud/kms": ">=5.7.0 <6",
+		"@nestm/tenant": ">=0.1.0-alpha.3 <0.2.0",
+		"@nestjs/common": "^12.0.0-alpha.5",
+		"@nestjs/core": "^12.0.0-alpha.5",
+		"reflect-metadata": "^0.2.2",
+		"rxjs": "^7.8.0"
+	},
+	"peerDependenciesMeta": {
+		"@aws-sdk/client-kms": {
+			"optional": true
+		},
+		"@azure/core-auth": {
+			"optional": true
+		},
+		"@azure/keyvault-keys": {
+			"optional": true
+		},
+		"@google-cloud/kms": {
+			"optional": true
+		},
+		"@nestm/tenant": {
+			"optional": true
+		},
+		"@nestjs/common": {
+			"optional": true
+		},
+		"@nestjs/core": {
+			"optional": true
+		},
+		"reflect-metadata": {
+			"optional": true
+		},
+		"rxjs": {
+			"optional": true
+		}
+	},
+	"devDependencies": {
+		"@arethetypeswrong/cli": "0.18.5",
+		"@aws-sdk/client-kms": "3.1106.0",
+		"@azure/core-auth": "1.11.0",
+		"@azure/keyvault-keys": "4.10.2",
+		"@changesets/cli": "2.31.1",
+		"@google-cloud/kms": "5.7.0",
+		"@nestm/tenant": "0.1.0-alpha.3",
+		"@nestjs/common": "12.0.0-alpha.5",
+		"@nestjs/core": "12.0.0-alpha.5",
+		"@nestjs/testing": "12.0.0-alpha.5",
+		"@types/node": "24.13.3",
+		"@vitest/coverage-v8": "4.1.10",
+		"oxlint": "1.77.0",
+		"oxlint-tsgolint": "7.0.2001",
+		"prettier": "3.9.6",
+		"publint": "0.3.23",
+		"reflect-metadata": "0.2.2",
+		"rxjs": "7.8.2",
+		"tsdown": "0.22.14",
+		"typescript": "7.0.2",
+		"vitest": "4.1.10"
+	}
+}
