@@ -108,6 +108,18 @@ function invalidResponse(): CryptoError {
 	return new CryptoError("KEY_PROVIDER", "Azure Key Vault returned an invalid response.");
 }
 
+// Key Vault wrapKey/unwrapKey (RSA-OAEP-256, A256KW) accept no AAD or OAEP label, so a
+// wrapping context can never be authenticated by the vault. Accepting one silently would
+// produce keys that unwrap under any context; refuse it instead.
+function assertEmptyWrappingContext(context: DataKeyContext): void {
+	if (context.wrappingContext.byteLength !== 0) {
+		throw new CryptoError(
+			"CONFIGURATION",
+			"Azure Key Vault cannot bind a wrapping context; it must be empty.",
+		);
+	}
+}
+
 function isCiphertextFailure(error: unknown): boolean {
 	if (typeof error !== "object" || error === null) return false;
 	if ("statusCode" in error && error.statusCode === 400) return true;
@@ -170,6 +182,7 @@ export class AzureKeyVaultProvider implements DataKeyProvider {
 	}
 
 	async generateDataKey(context: DataKeyContext): Promise<GeneratedDataKey> {
+		assertEmptyWrappingContext(context);
 		return providerCall(async () => {
 			this.#assertOpen();
 			const client = await this.#getClient();
@@ -203,6 +216,7 @@ export class AzureKeyVaultProvider implements DataKeyProvider {
 	}
 
 	async unwrapDataKey(dataKey: WrappedDataKey, context: DataKeyContext): Promise<KeyObject> {
+		assertEmptyWrappingContext(context);
 		if (dataKey.wrappingAlgorithm !== this.#algorithm) {
 			throw new CryptoError("INVALID_KEY", "The wrapped-key algorithm is unsupported.");
 		}
