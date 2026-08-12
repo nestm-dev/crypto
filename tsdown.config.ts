@@ -8,6 +8,7 @@ export default defineConfig({
 		"src/tenant/index.ts",
 		"src/http/index.ts",
 		"src/prisma/index.ts",
+		"src/keys/index.ts",
 		"src/key-wrap/rsa/index.ts",
 		"src/kms/aws/index.ts",
 		"src/kms/gcp/index.ts",

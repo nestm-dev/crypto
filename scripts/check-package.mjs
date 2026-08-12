@@ -11,6 +11,7 @@ const expectedExports = [
 	"./tenant",
 	"./http",
 	"./prisma",
+	"./keys",
 	"./key-wrap/rsa",
 	"./kms/aws",
 	"./kms/gcp",
