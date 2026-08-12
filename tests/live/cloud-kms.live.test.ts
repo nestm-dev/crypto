@@ -11,27 +11,32 @@ const gcpKeyName = process.env.NESTM_CRYPTO_LIVE_GCP_KEY_NAME;
 const azureKeyId = process.env.NESTM_CRYPTO_LIVE_AZURE_KEY_ID;
 const azureAccessToken = process.env.NESTM_CRYPTO_LIVE_AZURE_ACCESS_TOKEN;
 
-async function verifyLiveProvider(alias: string, provider: DataKeyProvider): Promise<void> {
+async function verifyLiveProvider(
+	alias: string,
+	provider: DataKeyProvider,
+	keyContext?: string,
+): Promise<void> {
 	const engine = new CipherEngine({
 		providers: [{ name: alias, provider }],
 		defaultProvider: alias,
 	});
 	const plaintext = `nestm-live-${randomUUID()}`;
+	const contextOption = keyContext === undefined ? {} : { keyContext };
 	try {
 		const envelope = await engine.encryptText(plaintext, {
 			aad: "live-suite:v1",
-			keyContext: "live-suite-key-context:v1",
+			...contextOption,
 		});
 		expect(
 			await engine.decryptText(envelope, {
 				aad: "live-suite:v1",
-				keyContext: "live-suite-key-context:v1",
+				...contextOption,
 			}),
 		).toBe(plaintext);
 		await expect(
 			engine.decryptText(envelope, {
 				aad: "wrong-live-suite",
-				keyContext: "live-suite-key-context:v1",
+				...contextOption,
 			}),
 		).rejects.toMatchObject({ code: "AUTHENTICATION_FAILED" });
 	} finally {
@@ -48,6 +53,7 @@ describe("credential-gated cloud KMS providers", () => {
 				clientConfig:
 					process.env.AWS_REGION === undefined ? {} : { region: process.env.AWS_REGION },
 			}),
+			"live-suite-key-context:v1",
 		);
 	});
 
@@ -57,6 +63,7 @@ describe("credential-gated cloud KMS providers", () => {
 			new GcpKmsProvider({
 				keyName: gcpKeyName!,
 			}),
+			"live-suite-key-context:v1",
 		);
 	});
 
@@ -71,13 +78,18 @@ describe("credential-gated cloud KMS providers", () => {
 					),
 				}),
 			};
-			await verifyLiveProvider(
-				"azure-live",
-				new AzureKeyVaultProvider({
-					keyId: azureKeyId!,
-					credential,
+			const provider = new AzureKeyVaultProvider({
+				keyId: azureKeyId!,
+				credential,
+			});
+			// Key Vault cannot bind a wrapping context, so the Azure round trip runs without a
+			// key context and a non-empty one must fail closed before reaching the vault.
+			await expect(
+				provider.generateDataKey({
+					wrappingContext: new TextEncoder().encode("live-suite-key-context:v1"),
 				}),
-			);
+			).rejects.toMatchObject({ code: "CONFIGURATION" });
+			await verifyLiveProvider("azure-live", provider);
 		},
 	);
 });

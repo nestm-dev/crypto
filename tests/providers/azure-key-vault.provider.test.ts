@@ -39,7 +39,7 @@ describe("AzureKeyVaultProvider", () => {
 		const provider = new AzureKeyVaultProvider({ keyId: KEY_ID, client });
 		const controller = new AbortController();
 		const context = {
-			wrappingContext: new TextEncoder().encode("tenant-scope"),
+			wrappingContext: new Uint8Array(),
 			signal: controller.signal,
 		};
 
@@ -103,6 +103,34 @@ describe("AzureKeyVaultProvider", () => {
 		} finally {
 			unwrappedRaw.fill(0);
 		}
+	});
+
+	it("fails closed on a non-empty wrapping context before calling Key Vault", async () => {
+		const wrapKey = vi.fn();
+		const unwrapKey = vi.fn();
+		const client = { keyID: KEY_ID, wrapKey, unwrapKey } as unknown as CryptographyClient;
+		const provider = new AzureKeyVaultProvider({ keyId: KEY_ID, client });
+		const context = { wrappingContext: new TextEncoder().encode("tenant-scope") };
+
+		await expect(provider.generateDataKey(context)).rejects.toMatchObject({
+			code: "CONFIGURATION",
+			message: "Azure Key Vault cannot bind a wrapping context; it must be empty.",
+		});
+		await expect(
+			provider.unwrapDataKey(
+				{
+					wrappedKey: new Uint8Array([1]),
+					keyReference: KEY_ID,
+					wrappingAlgorithm: AZURE_RSA_OAEP_256,
+				},
+				context,
+			),
+		).rejects.toMatchObject({
+			code: "CONFIGURATION",
+			message: "Azure Key Vault cannot bind a wrapping context; it must be empty.",
+		});
+		expect(wrapKey).not.toHaveBeenCalled();
+		expect(unwrapKey).not.toHaveBeenCalled();
 	});
 
 	it("rejects versionless URLs and clients bound to a different key", () => {

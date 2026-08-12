@@ -634,7 +634,10 @@ const azure = new AzureKeyVaultProvider({
 
 AWS aliases are rejected in favor of stable key IDs/ARNs. Google Cloud requires a full CryptoKey
 resource name. Azure requires a canonical version-specific key URL and defaults to RSA-OAEP-256;
-A256KW is available for compatible Managed HSM keys. Library-owned Azure credentials are sent only
+A256KW is available for compatible Managed HSM keys. Key Vault's wrap operations cannot bind
+additional authenticated data, so the Azure provider rejects a non-empty wrapping context with a
+`CONFIGURATION` error — use it only without a key context, or choose a provider that can bind one
+(AWS, GCP, RSA-OAEP, or the local key ring). Library-owned Azure credentials are sent only
 to known Azure Key Vault/Managed HSM DNS suffixes or exact application-configured `trustedHosts`.
 Applications may pass a prebuilt SDK client instead of construction options.
 
