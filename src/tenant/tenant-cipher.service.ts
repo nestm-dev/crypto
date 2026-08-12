@@ -14,14 +14,20 @@ import {
 	frame,
 	isCryptoError,
 	utf8,
+	type CipherCodec,
 	type CipherEnvelopeInfo,
 } from "../core/index.js";
+import { captureCipherCodec, decodeCipherValue, encodeCipherValue } from "../core/cipher-codec.js";
 import { TENANT_CRYPTO_OPTIONS, TENANT_CRYPTO_POLICY } from "./tenant-crypto.tokens.js";
 import type {
+	TenantBatchDecryptTextItem,
+	TenantBatchEncryptTextItem,
+	TenantBatchOptions,
 	TenantCipherOperationOptions,
 	TenantCryptoModuleOptions,
 	TenantCryptoPolicy,
 	TenantCryptoProfile,
+	TenantProtectTextItem,
 } from "./tenant-crypto.types.js";
 
 const TENANT_DOMAIN = utf8("@nestm/crypto/tenant");
@@ -76,7 +82,7 @@ export interface ResolvedTenantCryptoContext {
 	readonly keyContext: Uint8Array;
 }
 
-function assertPurpose(purpose: string): void {
+function assertPurpose(purpose: unknown): asserts purpose is string {
 	if (
 		typeof purpose !== "string" ||
 		purpose.length === 0 ||
@@ -89,6 +95,103 @@ function assertPurpose(purpose: string): void {
 			"A printable tenant crypto purpose of at most 255 UTF-8 bytes is required.",
 		);
 	}
+}
+
+interface CapturedTenantBinding {
+	readonly purpose: string;
+	readonly aad: Uint8Array;
+}
+
+interface CapturedTenantTextItem extends CapturedTenantBinding {
+	readonly value: string;
+}
+
+interface CapturedTenantBatchOptions {
+	readonly signal?: AbortSignal;
+}
+
+function captureBatchOptions(options: TenantBatchOptions): CapturedTenantBatchOptions {
+	try {
+		if (typeof options !== "object" || options === null) {
+			throw new TypeError("Invalid tenant batch options.");
+		}
+		const signal = options.signal;
+		if (signal !== undefined && !(signal instanceof AbortSignal)) {
+			throw new TypeError("Invalid abort signal.");
+		}
+		return Object.freeze(signal === undefined ? {} : { signal });
+	} catch (error: unknown) {
+		throw new CryptoError("INVALID_ARGUMENT", "Tenant batch options are invalid.", {
+			cause: error,
+		});
+	}
+}
+
+function isArray(value: unknown): boolean {
+	return Array.isArray(value);
+}
+
+function captureTextItems(
+	items: readonly object[],
+	property: "plaintext" | "envelope" | "value",
+	label: string,
+	maxItems: number,
+): readonly CapturedTenantTextItem[] {
+	if (!isArray(items)) {
+		throw new CryptoError("INVALID_ARGUMENT", `A tenant ${label} batch is required.`);
+	}
+	if (items.length > maxItems) {
+		throw new CryptoError("LIMIT_EXCEEDED", `The tenant ${label} batch has too many items.`);
+	}
+	const captured: CapturedTenantTextItem[] = [];
+	try {
+		for (const item of items) {
+			let value: unknown;
+			let purpose: unknown;
+			let callerAad: unknown;
+			try {
+				if (typeof item !== "object" || item === null) {
+					throw new TypeError("Invalid tenant batch item.");
+				}
+				value = Reflect.get(item, property) as unknown;
+				purpose = Reflect.get(item, "purpose") as unknown;
+				callerAad = Reflect.get(item, "aad") as unknown;
+			} catch (error: unknown) {
+				throw new CryptoError("INVALID_ARGUMENT", `A tenant ${label} batch item is invalid.`, {
+					cause: error,
+				});
+			}
+			if (typeof value !== "string") {
+				throw new CryptoError("INVALID_ARGUMENT", `A tenant ${label} text value is required.`);
+			}
+			let aad: Uint8Array | undefined;
+			try {
+				assertPurpose(purpose);
+				if (
+					callerAad !== undefined &&
+					typeof callerAad !== "string" &&
+					!(callerAad instanceof Uint8Array)
+				) {
+					throw new TypeError("Invalid authenticated data.");
+				}
+				aad = aadBytes(callerAad);
+				captured.push(Object.freeze({ value, purpose, aad }));
+			} catch (error: unknown) {
+				aad?.fill(0);
+				throw new CryptoError("INVALID_ARGUMENT", `A tenant ${label} batch item is invalid.`, {
+					cause: error,
+				});
+			}
+		}
+		return Object.freeze(captured);
+	} catch (error: unknown) {
+		for (const item of captured) item.aad.fill(0);
+		throw error;
+	}
+}
+
+function releaseTextItems(items: readonly CapturedTenantTextItem[]): void {
+	for (const item of items) item.aad.fill(0);
 }
 
 function assertNamespace(namespace: string): void {
@@ -243,9 +346,14 @@ export class TenantCryptoScopeService {
 
 	payloadAad(
 		context: ResolvedTenantCryptoContext,
-		options: TenantCipherOperationOptions,
+		options: Pick<TenantCipherOperationOptions, "purpose" | "aad">,
 	): Uint8Array {
-		return frame(context.tenantScope, utf8(options.purpose), aadBytes(options.aad));
+		const callerAad = aadBytes(options.aad);
+		try {
+			return frame(context.tenantScope, utf8(options.purpose), callerAad);
+		} finally {
+			callerAad.fill(0);
+		}
 	}
 
 	#requireTarget(): TenantTarget {
@@ -329,6 +437,72 @@ export class TenantCipherService {
 		}
 	}
 
+	async encryptTextBatch(
+		items: readonly TenantBatchEncryptTextItem[],
+		options: TenantBatchOptions = {},
+	): Promise<readonly string[]> {
+		const capturedOptions = captureBatchOptions(options);
+		const capturedItems = captureTextItems(
+			items,
+			"plaintext",
+			"text encryption",
+			this.#cipher.maxBatchItems,
+		);
+		try {
+			const context = await this.#scope.resolve(capturedOptions.signal);
+			this.#scope.assertActive(context);
+			const payloadAads = this.#payloadAads(context, capturedItems);
+			try {
+				const encrypted = await this.#cipher.encryptTextBatch(
+					capturedItems.map((item, index) => ({
+						plaintext: item.value,
+						aad: this.#requirePayloadAad(payloadAads, index),
+					})),
+					{
+						keyContext: context.keyContext,
+						provider: context.writeProvider,
+						...(capturedOptions.signal === undefined ? {} : { signal: capturedOptions.signal }),
+					},
+				);
+				this.#scope.assertActive(context);
+				return encrypted;
+			} finally {
+				for (const aad of payloadAads) aad.fill(0);
+			}
+		} finally {
+			releaseTextItems(capturedItems);
+		}
+	}
+
+	async encryptValue<Value>(
+		value: Value,
+		codec: CipherCodec<Value>,
+		options: TenantCipherOperationOptions,
+	): Promise<string> {
+		const captured = captureOperationOptions(options);
+		let plaintext: Uint8Array | undefined;
+		let payloadAad: Uint8Array | undefined;
+		try {
+			const capturedCodec = captureCipherCodec(codec);
+			plaintext = encodeCipherValue(value, capturedCodec);
+			const context = await this.#scope.resolve(captured.signal);
+			this.#scope.assertActive(context);
+			payloadAad = this.#scope.payloadAad(context, captured);
+			const envelope = await this.#cipher.encryptBytes(plaintext, {
+				aad: payloadAad,
+				keyContext: context.keyContext,
+				provider: context.writeProvider,
+				...(captured.signal === undefined ? {} : { signal: captured.signal }),
+			});
+			this.#scope.assertActive(context);
+			return envelope;
+		} finally {
+			plaintext?.fill(0);
+			payloadAad?.fill(0);
+			captured.aad.fill(0);
+		}
+	}
+
 	async decryptBytes(envelope: string, options: TenantCipherOperationOptions): Promise<Uint8Array> {
 		const captured = captureOperationOptions(options);
 		try {
@@ -380,6 +554,173 @@ export class TenantCipherService {
 		}
 	}
 
+	async decryptTextBatch(
+		items: readonly TenantBatchDecryptTextItem[],
+		options: TenantBatchOptions = {},
+	): Promise<readonly string[]> {
+		const capturedOptions = captureBatchOptions(options);
+		const capturedItems = captureTextItems(
+			items,
+			"envelope",
+			"text decryption",
+			this.#cipher.maxBatchItems,
+		);
+		try {
+			const context = await this.#scope.resolve(capturedOptions.signal);
+			this.#scope.assertActive(context);
+			for (const item of capturedItems) this.#assertAllowedEnvelope(item.value, context);
+			const payloadAads = this.#payloadAads(context, capturedItems);
+			try {
+				const decrypted = await normalizeTenantAuthentication(() =>
+					this.#cipher.decryptTextBatch(
+						capturedItems.map((item, index) => ({
+							envelope: item.value,
+							aad: this.#requirePayloadAad(payloadAads, index),
+						})),
+						{
+							keyContext: context.keyContext,
+							allowedProviders: context.readProviders,
+							...(capturedOptions.signal === undefined ? {} : { signal: capturedOptions.signal }),
+						},
+					),
+				);
+				this.#scope.assertActive(context);
+				return decrypted;
+			} finally {
+				for (const aad of payloadAads) aad.fill(0);
+			}
+		} finally {
+			releaseTextItems(capturedItems);
+		}
+	}
+
+	async decryptValue<Value>(
+		envelope: string,
+		codec: CipherCodec<Value>,
+		options: TenantCipherOperationOptions,
+	): Promise<Value> {
+		const captured = captureOperationOptions(options);
+		let payloadAad: Uint8Array | undefined;
+		try {
+			const capturedCodec = captureCipherCodec(codec);
+			const context = await this.#scope.resolve(captured.signal);
+			this.#scope.assertActive(context);
+			this.#assertAllowedEnvelope(envelope, context);
+			const operationAad = this.#scope.payloadAad(context, captured);
+			payloadAad = operationAad;
+			const plaintext = await normalizeTenantAuthentication(() =>
+				this.#cipher.decryptBytes(envelope, {
+					aad: operationAad,
+					keyContext: context.keyContext,
+					allowedProviders: context.readProviders,
+					...(captured.signal === undefined ? {} : { signal: captured.signal }),
+				}),
+			);
+			try {
+				this.#scope.assertActive(context);
+				const value = decodeCipherValue(plaintext, capturedCodec);
+				this.#scope.assertActive(context);
+				return value;
+			} finally {
+				plaintext.fill(0);
+			}
+		} finally {
+			payloadAad?.fill(0);
+			captured.aad.fill(0);
+		}
+	}
+
+	async protectTextBatch(
+		items: readonly TenantProtectTextItem[],
+		options: TenantBatchOptions = {},
+	): Promise<readonly string[]> {
+		const capturedOptions = captureBatchOptions(options);
+		const capturedItems = captureTextItems(
+			items,
+			"value",
+			"text protection",
+			this.#cipher.maxBatchItems,
+		);
+		try {
+			const context = await this.#scope.resolve(capturedOptions.signal);
+			this.#scope.assertActive(context);
+			const encryptedCandidates: Array<Readonly<{ item: CapturedTenantTextItem; index: number }>> =
+				[];
+			const plaintextItems: Array<Readonly<{ item: CapturedTenantTextItem; index: number }>> = [];
+			for (const [index, item] of capturedItems.entries()) {
+				const target = Object.freeze({ item, index });
+				if (item.value.startsWith("nmc")) encryptedCandidates.push(target);
+				else plaintextItems.push(target);
+			}
+
+			if (encryptedCandidates.length > 0) {
+				for (const { item } of encryptedCandidates) {
+					this.#assertAllowedEnvelope(item.value, context);
+				}
+				const candidateItems = encryptedCandidates.map(({ item }) => item);
+				const payloadAads = this.#payloadAads(context, candidateItems);
+				try {
+					const plaintexts = await normalizeTenantAuthentication(() =>
+						this.#cipher.decryptBatch(
+							encryptedCandidates.map(({ item }, index) => ({
+								envelope: item.value,
+								aad: this.#requirePayloadAad(payloadAads, index),
+							})),
+							{
+								keyContext: context.keyContext,
+								allowedProviders: context.readProviders,
+								...(capturedOptions.signal === undefined ? {} : { signal: capturedOptions.signal }),
+							},
+						),
+					);
+					try {
+						for (const plaintext of plaintexts) decodeUtf8(plaintext);
+					} finally {
+						for (const plaintext of plaintexts) plaintext.fill(0);
+					}
+				} finally {
+					for (const aad of payloadAads) aad.fill(0);
+				}
+				this.#scope.assertActive(context);
+			}
+
+			const protectedValues = capturedItems.map(({ value }) => value);
+			if (plaintextItems.length > 0) {
+				const plainItems = plaintextItems.map(({ item }) => item);
+				const payloadAads = this.#payloadAads(context, plainItems);
+				try {
+					const encrypted = await this.#cipher.encryptTextBatch(
+						plaintextItems.map(({ item }, index) => ({
+							plaintext: item.value,
+							aad: this.#requirePayloadAad(payloadAads, index),
+						})),
+						{
+							keyContext: context.keyContext,
+							provider: context.writeProvider,
+							...(capturedOptions.signal === undefined ? {} : { signal: capturedOptions.signal }),
+						},
+					);
+					for (const [outputIndex, { index }] of plaintextItems.entries()) {
+						const value = encrypted[outputIndex];
+						if (value === undefined) {
+							throw new CryptoError(
+								"CIPHER_FAILURE",
+								"Text protection produced an incomplete batch.",
+							);
+						}
+						protectedValues[index] = value;
+					}
+				} finally {
+					for (const aad of payloadAads) aad.fill(0);
+				}
+			}
+			this.#scope.assertActive(context);
+			return Object.freeze(protectedValues);
+		} finally {
+			releaseTextItems(capturedItems);
+		}
+	}
+
 	async reencrypt(envelope: string, options: TenantCipherOperationOptions): Promise<string> {
 		const captured = captureOperationOptions(options);
 		try {
@@ -404,6 +745,28 @@ export class TenantCipherService {
 
 	inspect(envelope: string): CipherEnvelopeInfo {
 		return this.#cipher.inspect(envelope);
+	}
+
+	#payloadAads(
+		context: ResolvedTenantCryptoContext,
+		items: readonly CapturedTenantBinding[],
+	): readonly Uint8Array[] {
+		const payloadAads: Uint8Array[] = [];
+		try {
+			for (const item of items) payloadAads.push(this.#scope.payloadAad(context, item));
+			return Object.freeze(payloadAads);
+		} catch (error: unknown) {
+			for (const aad of payloadAads) aad.fill(0);
+			throw error;
+		}
+	}
+
+	#requirePayloadAad(payloadAads: readonly Uint8Array[], index: number): Uint8Array {
+		const aad = payloadAads[index];
+		if (aad === undefined) {
+			throw new CryptoError("CIPHER_FAILURE", "A tenant payload batch is incomplete.");
+		}
+		return aad;
 	}
 
 	#assertAllowedEnvelope(envelope: string, context: ResolvedTenantCryptoContext): void {

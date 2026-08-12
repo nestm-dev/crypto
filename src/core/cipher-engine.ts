@@ -1,5 +1,11 @@
 import { KeyObject, randomBytes } from "node:crypto";
 import { Aes256GcmCipher, AES_256_GCM } from "./aes-256-gcm.js";
+import {
+	captureCipherCodec,
+	decodeCipherValue,
+	encodeCipherValue,
+	type CipherCodec,
+} from "./cipher-codec.js";
 import { aadBytes, frame, utf8, decodeUtf8 } from "./encoding.js";
 import {
 	encodeProtectedHeader,
@@ -12,8 +18,10 @@ import { authenticationFailed, CryptoError, providerCall, throwIfAborted } from 
 import type {
 	BatchDecryptItem,
 	BatchDecryptOptions,
+	BatchDecryptTextItem,
 	BatchEncryptItem,
 	BatchEncryptOptions,
+	BatchEncryptTextItem,
 	CipherAlgorithm,
 	CipherEngineOptions,
 	CipherEnvelopeInfo,
@@ -24,6 +32,7 @@ import type {
 } from "./types.js";
 
 export const DEFAULT_MAX_PAYLOAD_BYTES = 10 * 1024 * 1024;
+export const DEFAULT_MAX_BATCH_ITEMS = 256;
 
 function registry<Input, Value extends { readonly name: string }>(
 	values: readonly Input[],
@@ -239,6 +248,8 @@ export class CipherEngine {
 	readonly #defaultProvider: string;
 	readonly #defaultCipher: string;
 	readonly #maxPayloadBytes: number;
+	readonly #maxBatchItems: number;
+	readonly #maxBatchBytes: number;
 	readonly #nonceSource: (length: number) => Uint8Array;
 	#closed = false;
 
@@ -273,11 +284,31 @@ export class CipherEngine {
 			);
 		}
 		this.#maxPayloadBytes = maxPayloadBytes;
+		const maxBatchItems = options.maxBatchItems ?? DEFAULT_MAX_BATCH_ITEMS;
+		if (!Number.isSafeInteger(maxBatchItems) || maxBatchItems < 1 || maxBatchItems > 0xffff_ffff) {
+			throw new CryptoError(
+				"CONFIGURATION",
+				"The batch item limit must be a positive safe integer no greater than 2^32 - 1.",
+			);
+		}
+		this.#maxBatchItems = maxBatchItems;
+		const maxBatchBytes = options.maxBatchBytes ?? maxPayloadBytes;
+		if (!Number.isSafeInteger(maxBatchBytes) || maxBatchBytes < 0) {
+			throw new CryptoError(
+				"CONFIGURATION",
+				"The aggregate batch-byte limit must be a nonnegative safe integer.",
+			);
+		}
+		this.#maxBatchBytes = maxBatchBytes;
 		this.#nonceSource = options.nonceSource ?? ((length) => new Uint8Array(randomBytes(length)));
 	}
 
 	get defaultProvider(): string {
 		return this.#defaultProvider;
+	}
+
+	get maxBatchItems(): number {
+		return this.#maxBatchItems;
 	}
 
 	hasProvider(name: string): boolean {
@@ -359,11 +390,10 @@ export class CipherEngine {
 		if (!Array.isArray(items)) {
 			throw new CryptoError("INVALID_ARGUMENT", "An encryption batch is required.");
 		}
+		this.#assertBatchItemCount(items.length, "encryption");
 		if (items.length === 0) return Object.freeze([]);
-		if (items.length > 0xffff_ffff) {
-			throw new CryptoError("LIMIT_EXCEEDED", "The encryption batch is too large.");
-		}
 		const capturedItems: Array<Readonly<{ plaintext: Uint8Array; aad: Uint8Array }>> = [];
+		let aggregateBytes = 0;
 		try {
 			for (const item of items) {
 				let plaintext: unknown;
@@ -385,6 +415,11 @@ export class CipherEngine {
 				if (plaintext.byteLength > this.#maxPayloadBytes) {
 					throw new CryptoError("LIMIT_EXCEEDED", "The plaintext exceeds the configured limit.");
 				}
+				aggregateBytes = this.#addBatchBytes(
+					aggregateBytes,
+					plaintext.byteLength,
+					"The plaintext batch exceeds the configured aggregate limit.",
+				);
 				let capturedAad: Uint8Array | undefined;
 				let capturedPlaintext: Uint8Array | undefined;
 				try {
@@ -506,6 +541,77 @@ export class CipherEngine {
 		}
 	}
 
+	async encryptTextBatch(
+		items: readonly BatchEncryptTextItem[],
+		options: BatchEncryptOptions = {},
+	): Promise<readonly string[]> {
+		if (!Array.isArray(items)) {
+			throw new CryptoError("INVALID_ARGUMENT", "A text encryption batch is required.");
+		}
+		this.#assertBatchItemCount(items.length, "text encryption");
+		const batch: Array<Readonly<{ plaintext: Uint8Array; aad: Uint8Array }>> = [];
+		let aggregateBytes = 0;
+		try {
+			for (const item of items) {
+				let plaintext: unknown;
+				let callerAad: unknown;
+				try {
+					if (typeof item !== "object" || item === null) {
+						throw new TypeError("Invalid text encryption batch item.");
+					}
+					plaintext = item.plaintext;
+					callerAad = item.aad;
+				} catch (error: unknown) {
+					throw new CryptoError("INVALID_ARGUMENT", "A text encryption batch item is invalid.", {
+						cause: error,
+					});
+				}
+				if (typeof plaintext !== "string") {
+					throw new CryptoError("INVALID_ARGUMENT", "Plaintext text is required.");
+				}
+				let aad: Uint8Array | undefined;
+				let encoded: Uint8Array | undefined;
+				try {
+					aad = captureAad(callerAad, "Authenticated data must be text or bytes.");
+					encoded = utf8(plaintext);
+					if (encoded.byteLength > this.#maxPayloadBytes) {
+						throw new CryptoError("LIMIT_EXCEEDED", "The plaintext exceeds the configured limit.");
+					}
+					aggregateBytes = this.#addBatchBytes(
+						aggregateBytes,
+						encoded.byteLength,
+						"The plaintext batch exceeds the configured aggregate limit.",
+					);
+					batch.push(Object.freeze({ plaintext: encoded, aad }));
+				} catch (error: unknown) {
+					aad?.fill(0);
+					encoded?.fill(0);
+					throw error;
+				}
+			}
+			return await this.encryptBatch(batch, options);
+		} finally {
+			for (const item of batch) {
+				item.plaintext.fill(0);
+				item.aad.fill(0);
+			}
+		}
+	}
+
+	async encryptValue<Value>(
+		value: Value,
+		codec: CipherCodec<Value>,
+		options: EncryptOptions = {},
+	): Promise<string> {
+		const capturedCodec = captureCipherCodec(codec);
+		const plaintext = encodeCipherValue(value, capturedCodec);
+		try {
+			return await this.encryptBytes(plaintext, options);
+		} finally {
+			plaintext.fill(0);
+		}
+	}
+
 	async decryptBytes(envelope: string, options: DecryptOptions = {}): Promise<Uint8Array> {
 		let captured: DecryptOptions;
 		try {
@@ -580,6 +686,7 @@ export class CipherEngine {
 		if (!Array.isArray(items)) {
 			throw new CryptoError("INVALID_ARGUMENT", "A decryption batch is required.");
 		}
+		this.#assertBatchItemCount(items.length, "decryption");
 		if (items.length === 0) return Object.freeze([]);
 		const wrappingContext = captureAad(keyContext, "Key context must be text or bytes.");
 		const parsedItems: Array<
@@ -588,6 +695,7 @@ export class CipherEngine {
 				parsed: import("./envelope.js").ParsedEnvelope;
 			}>
 		> = [];
+		let aggregateBytes = 0;
 		try {
 			for (const item of items) {
 				let envelope: unknown;
@@ -610,6 +718,11 @@ export class CipherEngine {
 				try {
 					capturedAad = captureAad(callerAad, "Authenticated data must be text or bytes.");
 					const parsed = parseEnvelope(envelope, this.#maxPayloadBytes);
+					aggregateBytes = this.#addBatchBytes(
+						aggregateBytes,
+						parsed.ciphertext.byteLength,
+						"The ciphertext batch exceeds the configured aggregate limit.",
+					);
 					parsedItems.push(Object.freeze({ aad: capturedAad, parsed }));
 				} catch (error: unknown) {
 					capturedAad?.fill(0);
@@ -721,6 +834,61 @@ export class CipherEngine {
 		}
 	}
 
+	async decryptTextBatch(
+		items: readonly BatchDecryptTextItem[],
+		options: BatchDecryptOptions = {},
+	): Promise<readonly string[]> {
+		if (!Array.isArray(items)) {
+			throw new CryptoError("INVALID_ARGUMENT", "A text decryption batch is required.");
+		}
+		this.#assertBatchItemCount(items.length, "text decryption");
+		const batch: Array<Readonly<{ envelope: string; aad: Uint8Array }>> = [];
+		try {
+			for (const item of items) {
+				let envelope: unknown;
+				let callerAad: unknown;
+				try {
+					if (typeof item !== "object" || item === null) {
+						throw new TypeError("Invalid text decryption batch item.");
+					}
+					envelope = item.envelope;
+					callerAad = item.aad;
+				} catch (error: unknown) {
+					throw new CryptoError("INVALID_ARGUMENT", "A text decryption batch item is invalid.", {
+						cause: error,
+					});
+				}
+				if (typeof envelope !== "string") {
+					throw new CryptoError("INVALID_ARGUMENT", "A ciphertext envelope is required.");
+				}
+				const aad = captureAad(callerAad, "Authenticated data must be text or bytes.");
+				batch.push(Object.freeze({ envelope, aad }));
+			}
+			const plaintexts = await this.decryptBatch(batch, options);
+			try {
+				return Object.freeze(plaintexts.map((plaintext) => decodeUtf8(plaintext)));
+			} finally {
+				for (const plaintext of plaintexts) plaintext.fill(0);
+			}
+		} finally {
+			for (const item of batch) item.aad.fill(0);
+		}
+	}
+
+	async decryptValue<Value>(
+		envelope: string,
+		codec: CipherCodec<Value>,
+		options: DecryptOptions = {},
+	): Promise<Value> {
+		const capturedCodec = captureCipherCodec(codec);
+		const plaintext = await this.decryptBytes(envelope, options);
+		try {
+			return decodeCipherValue(plaintext, capturedCodec);
+		} finally {
+			plaintext.fill(0);
+		}
+	}
+
 	async reencrypt(envelope: string, options: ReencryptOptions = {}): Promise<string> {
 		let aad: Uint8Array | undefined;
 		let keyContext: Uint8Array | undefined;
@@ -801,6 +969,19 @@ export class CipherEngine {
 				}),
 			),
 		);
+	}
+
+	#assertBatchItemCount(length: number, operation: string): void {
+		if (length > this.#maxBatchItems) {
+			throw new CryptoError("LIMIT_EXCEEDED", `The ${operation} batch has too many items.`);
+		}
+	}
+
+	#addBatchBytes(total: number, next: number, message: string): number {
+		if (next > this.#maxBatchBytes - total) {
+			throw new CryptoError("LIMIT_EXCEEDED", message);
+		}
+		return total + next;
 	}
 
 	#assertOpen(): void {

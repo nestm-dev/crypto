@@ -9,6 +9,8 @@ const expectedExports = [
 	"./core",
 	"./fields",
 	"./tenant",
+	"./http",
+	"./prisma",
 	"./key-wrap/rsa",
 	"./kms/aws",
 	"./kms/gcp",
@@ -46,6 +48,7 @@ const optionalPeers = [
 	"@google-cloud/kms",
 	"@azure/core-auth",
 	"@azure/keyvault-keys",
+	"class-transformer",
 ];
 for (const peer of optionalPeers) {
 	if (manifest.peerDependenciesMeta?.[peer]?.optional !== true) {

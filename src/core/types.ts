@@ -71,6 +71,8 @@ export interface CipherEngineOptions {
 	readonly ciphers?: readonly CipherRegistration[];
 	readonly defaultCipher?: string;
 	readonly maxPayloadBytes?: number;
+	readonly maxBatchItems?: number;
+	readonly maxBatchBytes?: number;
 	/** Test seam. Production callers should use the default CSPRNG. */
 	readonly nonceSource?: (length: number) => Uint8Array;
 }
@@ -88,6 +90,11 @@ export interface BatchEncryptItem {
 	readonly aad?: CipherAad;
 }
 
+export interface BatchEncryptTextItem {
+	readonly plaintext: string;
+	readonly aad?: CipherAad;
+}
+
 export interface BatchEncryptOptions extends Omit<EncryptOptions, "aad"> {}
 
 export interface DecryptOptions {
@@ -98,6 +105,11 @@ export interface DecryptOptions {
 }
 
 export interface BatchDecryptItem {
+	readonly envelope: string;
+	readonly aad?: CipherAad;
+}
+
+export interface BatchDecryptTextItem {
 	readonly envelope: string;
 	readonly aad?: CipherAad;
 }

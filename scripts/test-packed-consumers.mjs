@@ -72,6 +72,22 @@ const engine = new core.CipherEngine({
 });
 const encrypted = await engine.encryptText("packed core", { aad: "packed.test" });
 assert.equal(await engine.decryptText(encrypted, { aad: "packed.test" }), "packed core");
+const batch = await engine.encryptTextBatch([
+  { plaintext: "first", aad: "packed.batch.first" },
+  { plaintext: "second", aad: "packed.batch.second" },
+]);
+assert.deepEqual(await engine.decryptTextBatch([
+  { envelope: batch[0] ?? "", aad: "packed.batch.first" },
+  { envelope: batch[1] ?? "", aad: "packed.batch.second" },
+]), ["first", "second"]);
+const packedCodec = core.jsonCodec<{ readonly value: string }>((value) => {
+  if (typeof value !== "object" || value === null || !("value" in value) || typeof value.value !== "string") {
+    throw new TypeError("invalid packed value");
+  }
+  return { value: value.value };
+});
+const encodedValue = await engine.encryptValue({ value: "typed" }, packedCodec);
+assert.deepEqual(await engine.decryptValue(encodedValue, packedCodec), { value: "typed" });
 assert.equal(engine.inspect(encrypted).authenticated, false);
 await engine.close();
 `,
@@ -112,6 +128,7 @@ function testIntegrationConsumer(tarball) {
 			"@nestjs/common@12.0.0-alpha.5",
 			"@nestjs/core@12.0.0-alpha.5",
 			"@nestjs/testing@12.0.0-alpha.5",
+			"class-transformer@0.5.1",
 			"@standard-schema/spec@1.1.0",
 			"reflect-metadata@0.2.2",
 			"rxjs@7.8.2",
@@ -127,6 +144,8 @@ function testIntegrationConsumer(tarball) {
 		"@nestm/crypto",
 		"@nestm/crypto/fields",
 		"@nestm/crypto/tenant",
+		"@nestm/crypto/http",
+		"@nestm/crypto/prisma",
 		"@nestm/crypto/key-wrap/rsa",
 		"@nestm/crypto/kms/aws",
 		"@nestm/crypto/kms/gcp",
@@ -174,6 +193,21 @@ function testIntegrationConsumer(tarball) {
 			'await assert.rejects(() => tenantCipher.decryptText(tenantEnvelope, { purpose: "packed.tenant" }), (error: unknown) => entry0.isCryptoError(error, "AUTHENTICATION_FAILED"));',
 			'activeTenantId = "tenant-a";',
 			'assert.equal(await tenantCipher.decryptText(tenantEnvelope, { purpose: "packed.tenant" }), "tenant secret");',
+			"const tenantFields = tenantModuleRef.get(entry2.TenantFieldCipherService);",
+			'class PackedHttpSecret { secret = "packed HTTP"; }',
+			'entry0.EncryptedField("packed.http")(PackedHttpSecret.prototype, "secret");',
+			"const packedHttpSecret = new PackedHttpSecret();",
+			"const httpPipe = new entry3.TenantEncryptFieldsPipe(tenantFields);",
+			'await httpPipe.transform(packedHttpSecret, { type: "body", metatype: PackedHttpSecret });',
+			"assert.match(packedHttpSecret.secret, /^nmc1\\./u);",
+			"await tenantFields.decryptFieldsInPlace(packedHttpSecret);",
+			'assert.equal(packedHttpSecret.secret, "packed HTTP");',
+			'const prismaEncryption = entry4.createTenantPrismaFieldEncryption(tenantCipher, { registry: { PackedRecord: { secret: { purpose: "packed.prisma" } } } });',
+			'const prismaArgs = { data: { secret: "packed Prisma" } };',
+			'await prismaEncryption.encryptWriteArgs({ model: "PackedRecord", operation: "create", args: prismaArgs });',
+			"assert.match(prismaArgs.data.secret, /^nmc1\\./u);",
+			'await prismaEncryption.assertWriteArgsEncrypted({ model: "PackedRecord", operation: "create", args: prismaArgs });',
+			'assert.equal(await tenantCipher.decryptText(prismaArgs.data.secret, { purpose: "packed.prisma" }), "packed Prisma");',
 			"await tenantModuleRef.close();",
 		].join("\n"),
 	);

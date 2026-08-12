@@ -2,8 +2,11 @@ import { Inject, Injectable, type OnModuleDestroy } from "@nestjs/common";
 import {
 	type BatchDecryptItem,
 	type BatchDecryptOptions,
+	type BatchDecryptTextItem,
 	type BatchEncryptItem,
 	type BatchEncryptOptions,
+	type BatchEncryptTextItem,
+	type CipherCodec,
 	CipherEngine,
 	type CipherEnvelopeInfo,
 	type DecryptOptions,
@@ -22,6 +25,10 @@ export class CipherService implements OnModuleDestroy {
 
 	get defaultProvider(): string {
 		return this.#engine.defaultProvider;
+	}
+
+	get maxBatchItems(): number {
+		return this.#engine.maxBatchItems;
 	}
 
 	hasProvider(name: string): boolean {
@@ -43,6 +50,21 @@ export class CipherService implements OnModuleDestroy {
 		return this.#engine.encryptBatch(items, options);
 	}
 
+	encryptTextBatch(
+		items: readonly BatchEncryptTextItem[],
+		options?: BatchEncryptOptions,
+	): Promise<readonly string[]> {
+		return this.#engine.encryptTextBatch(items, options);
+	}
+
+	encryptValue<Value>(
+		value: Value,
+		codec: CipherCodec<Value>,
+		options?: EncryptOptions,
+	): Promise<string> {
+		return this.#engine.encryptValue(value, codec, options);
+	}
+
 	decryptBytes(envelope: string, options?: DecryptOptions): Promise<Uint8Array> {
 		return this.#engine.decryptBytes(envelope, options);
 	}
@@ -56,6 +78,21 @@ export class CipherService implements OnModuleDestroy {
 		options?: BatchDecryptOptions,
 	): Promise<readonly Uint8Array[]> {
 		return this.#engine.decryptBatch(items, options);
+	}
+
+	decryptTextBatch(
+		items: readonly BatchDecryptTextItem[],
+		options?: BatchDecryptOptions,
+	): Promise<readonly string[]> {
+		return this.#engine.decryptTextBatch(items, options);
+	}
+
+	decryptValue<Value>(
+		envelope: string,
+		codec: CipherCodec<Value>,
+		options?: DecryptOptions,
+	): Promise<Value> {
+		return this.#engine.decryptValue(envelope, codec, options);
 	}
 
 	reencrypt(envelope: string, options?: ReencryptOptions): Promise<string> {

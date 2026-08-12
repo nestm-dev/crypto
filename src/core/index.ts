@@ -4,7 +4,12 @@ export {
 	AES_GCM_KEY_WRAP,
 	type AesKeyRingProviderOptions,
 } from "./aes-key-ring.provider.js";
-export { CipherEngine, DEFAULT_MAX_PAYLOAD_BYTES } from "./cipher-engine.js";
+export {
+	CipherEngine,
+	DEFAULT_MAX_BATCH_ITEMS,
+	DEFAULT_MAX_PAYLOAD_BYTES,
+} from "./cipher-engine.js";
+export { jsonCodec, type CipherCodec } from "./cipher-codec.js";
 export {
 	authenticationFailed,
 	CryptoError,
@@ -16,8 +21,10 @@ export { aadBytes, base64url, decodeUtf8, frame, parseBase64url, utf8 } from "./
 export type {
 	BatchDecryptItem,
 	BatchDecryptOptions,
+	BatchDecryptTextItem,
 	BatchEncryptItem,
 	BatchEncryptOptions,
+	BatchEncryptTextItem,
 	CipherAad,
 	CipherAlgorithm,
 	CipherDecryptInput,

@@ -1,8 +1,8 @@
 # @nestm/crypto
 
 Authenticated, versioned encryption for Node.js and NestJS 12. The package provides an
-AES-256-GCM core, envelope key providers, explicit field traversal, cloud KMS adapters, and a
-fail-closed bridge to `@nestm/tenant`.
+AES-256-GCM core, envelope key providers, explicit field traversal, cloud KMS adapters, a
+fail-closed bridge to `@nestm/tenant`, and opt-in HTTP and Prisma field adapters.
 
 > This package is an alpha. Pin an exact version, retain every key needed by stored ciphertext, and
 > test rotation and recovery before using it for production data.
@@ -11,7 +11,7 @@ fail-closed bridge to `@nestm/tenant`.
 
 - Node.js 22.13 or newer
 - ESM and NodeNext module resolution
-- NestJS 12 only when using the root, field, or tenant services
+- NestJS 12 only when using the root, field, tenant, HTTP, or Prisma services
 
 Install only the integrations the application uses:
 
@@ -24,14 +24,20 @@ pnpm add @nestjs/common@next @nestjs/core@next reflect-metadata rxjs
 # Optional tenant bridge
 pnpm add @nestm/tenant
 
+# Optional HTTP DTO adapter
+pnpm add class-transformer class-validator
+
 # Optional cloud adapters
 pnpm add @aws-sdk/client-kms
 pnpm add @google-cloud/kms
 pnpm add @azure/core-auth @azure/keyvault-keys
 ```
 
-Cloud SDKs, NestJS, and `@nestm/tenant` are optional peers. A consumer that imports only
-`@nestm/crypto/core` installs none of them.
+Cloud SDKs, NestJS, `@nestm/tenant`, and `class-transformer` are optional peers. `class-validator` is
+application-owned and needed only when the app uses Nest's `ValidationPipe` validation. The Prisma
+adapter is schema-agnostic and uses the consuming application's Prisma client, so it adds no Prisma
+dependency. A consumer that imports only `@nestm/crypto/core` installs none of the optional
+integrations.
 
 ## NestJS quick start
 
@@ -127,12 +133,88 @@ Both `CipherService` and `CipherEngine` provide:
 
 - `encryptText()` and `decryptText()` for UTF-8 strings;
 - `encryptBytes()` and `decryptBytes()` for `Uint8Array` values;
+- `encryptTextBatch()` and `decryptTextBatch()` for one-key text batches with per-item AAD;
+- `encryptValue()` and `decryptValue()` through an explicit, typed `CipherCodec<Value>`;
 - `reencrypt()` to authenticate and rewrite one envelope with the selected current provider/cipher;
 - `inspect()` to parse visible envelope metadata.
 
+Codecs make serialization an application-owned contract. `jsonCodec()` requires a validator for the
+authenticated JSON value instead of trusting the parsed shape:
+
+```ts
+import { jsonCodec } from "@nestm/crypto/core";
+
+interface Preferences {
+	theme: "dark" | "light";
+}
+
+const preferencesCodec = jsonCodec<Preferences>((value) => {
+	if (
+		typeof value !== "object" ||
+		value === null ||
+		!("theme" in value) ||
+		(value.theme !== "dark" && value.theme !== "light")
+	) {
+		throw new TypeError("Invalid preferences");
+	}
+	return { theme: value.theme };
+});
+
+const protectedPreferences = await cipher.encryptValue({ theme: "dark" }, preferencesCodec, {
+	aad: "customer.preferences",
+});
+const preferences = await cipher.decryptValue(protectedPreferences, preferencesCodec, {
+	aad: "customer.preferences",
+});
+```
+
+The added core/service signatures are:
+
+```ts
+interface CipherCodec<Value> {
+	encode(this: void, value: Value): Uint8Array;
+	decode(this: void, plaintext: Uint8Array): Value;
+}
+
+interface BatchEncryptTextItem {
+	readonly plaintext: string;
+	readonly aad?: CipherAad;
+}
+
+interface BatchDecryptTextItem {
+	readonly envelope: string;
+	readonly aad?: CipherAad;
+}
+
+encryptTextBatch(
+	items: readonly BatchEncryptTextItem[],
+	options?: BatchEncryptOptions,
+): Promise<readonly string[]>;
+
+decryptTextBatch(
+	items: readonly BatchDecryptTextItem[],
+	options?: BatchDecryptOptions,
+): Promise<readonly string[]>;
+
+encryptValue<Value>(
+	value: Value,
+	codec: CipherCodec<Value>,
+	options?: EncryptOptions,
+): Promise<string>;
+
+decryptValue<Value>(
+	envelope: string,
+	codec: CipherCodec<Value>,
+	options?: DecryptOptions,
+): Promise<Value>;
+```
+
 Operations accept `AbortSignal`. Encrypt can select a registered logical `provider` and `cipher`;
 decrypt can restrict `allowedProviders`. The default maximum buffered plaintext/ciphertext size is
-10 MiB and can be changed with `maxPayloadBytes` at engine/module registration.
+10 MiB and can be changed with `maxPayloadBytes` at engine/module registration. Batches default to at
+most 256 items through `maxBatchItems`. Their aggregate plaintext/ciphertext limit is controlled by
+`maxBatchBytes`, which defaults to `maxPayloadBytes`. Single-item APIs use the same batch engine, so a
+lower `maxBatchBytes` also lowers their effective payload limit.
 
 Cancellation rejects the caller promptly and is cooperative underneath: a provider or cloud SDK that
 cannot interrupt an in-flight request may finish that request in the background, and its late result is
@@ -163,8 +245,8 @@ nmc1.<protected>.<wrappedKey>.<iv>.<ciphertext>.<tag>
 
 The canonical protected header records the format version, cipher, logical provider, key reference,
 and wrapping algorithm. Header bytes, the wrapped key, and caller context are authenticated by
-AES-256-GCM. The current version uses a fresh 32-byte data key and 12-byte nonce per encryption with a
-16-byte authentication tag.
+AES-256-GCM. The current version uses a fresh 32-byte data key for each single-item operation or batch.
+Every envelope has a unique 12-byte nonce and 16-byte authentication tag.
 
 The `nmc1` format constrains registered ciphers to a 12-byte nonce so batch encryption can reserve the
 final four bytes for a collision-free operation counter. The cipher/provider contracts are extensible,
@@ -199,8 +281,8 @@ await fields.decryptFieldsInPlace(record);
 `CryptoModule` provides and exports `FieldCipherService`; inject it like any Nest provider.
 
 Traversal fails on cycles, excessive depth, unsupported decorated values, and ambiguous plain nested
-objects. It does not hook HTTP serialization or an ORM. Every persistence/read path remains responsible
-for calling the service.
+objects. The base field service does not hook HTTP serialization or an ORM. Use the explicit adapters
+below when those are the application's chosen enforcement boundaries.
 
 Strict decryption is the default. A migration may explicitly allow legacy plaintext, but malformed,
 tampered, wrong-purpose, and cross-context envelopes still fail. An existing envelope counts as an
@@ -267,11 +349,256 @@ Missing tenant context and ordinary unscoped bypass fail closed. An audited targ
 `TenantFieldCipherService` applies the same tenant binding to decorated fields and resolves the tenant
 profile once per traversal.
 
-## Key-provider entry points
+Tenant text batches accept a purpose and optional AAD for every item. `protectTextBatch()` is the
+idempotent write-boundary operation: it authenticates every existing `nmc*` value in the active tenant
+context before encrypting any plaintext item.
+
+```ts
+const [taxId, email] = await tenantCipher.protectTextBatch([
+	{ value: input.taxId, purpose: "customer.tax-id" },
+	{ value: input.email, purpose: "customer.email" },
+]);
+```
+
+```ts
+interface TenantBatchOptions {
+	readonly signal?: AbortSignal;
+}
+
+interface TenantBatchEncryptTextItem {
+	readonly plaintext: string;
+	readonly purpose: string;
+	readonly aad?: CipherAad;
+}
+
+interface TenantBatchDecryptTextItem {
+	readonly envelope: string;
+	readonly purpose: string;
+	readonly aad?: CipherAad;
+}
+
+interface TenantProtectTextItem {
+	readonly value: string;
+	readonly purpose: string;
+	readonly aad?: CipherAad;
+}
+
+encryptTextBatch(
+	items: readonly TenantBatchEncryptTextItem[],
+	options?: TenantBatchOptions,
+): Promise<readonly string[]>;
+
+decryptTextBatch(
+	items: readonly TenantBatchDecryptTextItem[],
+	options?: TenantBatchOptions,
+): Promise<readonly string[]>;
+
+encryptValue<Value>(
+	value: Value,
+	codec: CipherCodec<Value>,
+	options: TenantCipherOperationOptions,
+): Promise<string>;
+
+decryptValue<Value>(
+	envelope: string,
+	codec: CipherCodec<Value>,
+	options: TenantCipherOperationOptions,
+): Promise<Value>;
+
+protectTextBatch(
+	items: readonly TenantProtectTextItem[],
+	options?: TenantBatchOptions,
+): Promise<readonly string[]>;
+```
+
+## NestJS HTTP field adapter
+
+`@nestm/crypto/http` supplies an explicit request pipe and opt-in response interceptor. Request
+validation and transformation remain separate: the encryption pipe requires real DTO class instances,
+so run a transforming `ValidationPipe` before it. Nested DTO properties still need
+`@Type(() => NestedDto)` from `class-transformer`.
+
+```ts
+import { Body, Controller, Post, UseInterceptors, UsePipes, ValidationPipe } from "@nestjs/common";
+import { Type } from "class-transformer";
+import { EncryptedField } from "@nestm/crypto/fields";
+import {
+	DecryptTenantFieldsAs,
+	TenantDecryptFieldsInterceptor,
+	TenantEncryptFieldsPipe,
+} from "@nestm/crypto/http";
+
+class AddressDto {
+	@EncryptedField("customer.address.line-1")
+	line1!: string;
+}
+
+class CustomerDto {
+	@EncryptedField("customer.tax-id")
+	taxId!: string;
+
+	@Type(() => AddressDto)
+	address!: AddressDto;
+}
+
+@Controller("customers")
+export class CustomersController {
+	@Post()
+	@UsePipes(new ValidationPipe({ transform: true }), TenantEncryptFieldsPipe)
+	@UseInterceptors(TenantDecryptFieldsInterceptor)
+	@DecryptTenantFieldsAs(() => CustomerDto)
+	create(@Body() input: CustomerDto): Promise<CustomerDto> {
+		return this.save(input);
+	}
+
+	private save(input: CustomerDto): Promise<CustomerDto> {
+		return Promise.resolve(input);
+	}
+}
+```
+
+Register both adapter classes as providers where they are used. The interceptor does nothing unless
+the handler has `@DecryptTenantFieldsAs()`. A decorated handler accepts an object, an array, or `null`,
+maps objects to the declared DTO class, and then decrypts decorated fields. Decrypting into an HTTP
+response is a data-exposure decision; apply the decorator only to routes whose authorization and DTO
+shape intentionally expose those fields. The pipe ignores non-body parameters; an opted-in body with
+missing DTO metadata or a value of the wrong class fails closed.
+
+The public adapter signatures are:
+
+```ts
+class TenantEncryptFieldsPipe implements PipeTransform<unknown, Promise<unknown>> {
+	constructor(fields: TenantFieldCipherService, options?: TenantEncryptFieldsPipeOptions);
+	transform(value: unknown, metadata: ArgumentMetadata): Promise<unknown>;
+}
+
+function DecryptTenantFieldsAs<Value extends object>(
+	type: () => Type<Value>,
+	options?: TenantFieldDecryptOptions,
+): MethodDecorator;
+
+class TenantDecryptFieldsInterceptor implements NestInterceptor<unknown, unknown> {
+	constructor(fields: TenantFieldCipherService, reflector: Reflector);
+	intercept(context: ExecutionContext, next: CallHandler<unknown>): Observable<unknown>;
+}
+```
+
+## Prisma write-encryption adapter
+
+`@nestm/crypto/prisma` encrypts registered fields in Prisma-shaped write arguments without importing
+or retaining a raw data-encryption key. It supports direct `create`, `update`, `upsert`, `createMany`,
+`createManyAndReturn`, `updateMany`, and `updateManyAndReturn` data, plus configured nested
+create/update/upsert/createMany/updateMany relations.
+
+```ts
+import { createTenantPrismaFieldEncryption } from "@nestm/crypto/prisma";
+
+const prismaEncryption = createTenantPrismaFieldEncryption(tenantCipher, {
+	registry: {
+		Customer: {
+			taxId: { purpose: "customer.tax-id" },
+			billingEmail: { purpose: "customer.billing-email" },
+		},
+		Order: {
+			internalNotes: { purpose: "order.internal-notes" },
+		},
+	},
+	relations: {
+		Account: { customers: "Customer", orders: "Order" },
+	},
+});
+
+await prismaEncryption.encryptWriteArgs({
+	model: "Customer",
+	operation: "update",
+	args,
+});
+
+// Or use this as an independent final guard immediately before query(args).
+await prismaEncryption.assertWriteArgsEncrypted({
+	model: "Customer",
+	operation: "update",
+	args,
+});
+```
+
+Wire the processor into the application's Prisma `$extends` query hook for the seven exported
+`TENANT_PRISMA_WRITE_OPERATIONS`, immediately before `query(args)`. Both methods mutate no structural
+shape: encryption changes only registered string values (including `{ set: value }` operations), and
+assertion changes nothing. Existing `nmc*` values are authenticated for the active tenant and purpose;
+malformed, cross-tenant, or wrong-purpose values fail closed. Unsupported or ambiguous nested write
+shapes also fail instead of being silently skipped. Reads remain an explicit application/HTTP
+decryption concern. The adapter does not bind an envelope to a row ID, so a valid value can be replayed
+between rows with the same purpose inside one tenant; use a service boundary with stable row-specific
+AAD when that threat is in scope.
+
+The processor contract is:
+
+```ts
+interface TenantPrismaWriteProcessor {
+	encryptWriteArgs(input: TenantPrismaWriteInput): Promise<void>;
+	assertWriteArgsEncrypted(input: TenantPrismaWriteInput): Promise<void>;
+}
+
+type TenantPrismaWriteOperation =
+	| "create"
+	| "update"
+	| "upsert"
+	| "createMany"
+	| "createManyAndReturn"
+	| "updateMany"
+	| "updateManyAndReturn";
+
+interface TenantPrismaWriteInput {
+	readonly model: string;
+	readonly operation: TenantPrismaWriteOperation;
+	readonly args: unknown;
+}
+
+interface TenantPrismaFieldEncryptionOptions {
+	readonly registry: TenantPrismaFieldRegistry;
+	readonly relations?: TenantPrismaRelationMap;
+	readonly maxDepth?: number;
+}
+
+function createTenantPrismaFieldEncryption(
+	cipher: TenantCipherService,
+	options: TenantPrismaFieldEncryptionOptions,
+): TenantPrismaWriteProcessor;
+```
+
+## `nestjs-field-encryption` compatibility map
+
+This package now covers the integration surfaces demonstrated by
+[`RoyAbra27/nestjs-field-encryption`](https://github.com/RoyAbra27/nestjs-field-encryption), with
+purpose-bound and tenant-bound contracts:
+
+| Referenced package                            | `@nestm/crypto` equivalent                                 | Status and important difference                                      |
+| --------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------- |
+| `@Encrypt()`                                  | `@EncryptedField(purpose)`                                 | Implemented; every field has authenticated domain separation         |
+| `FieldEncryptor`                              | `FieldCipherService` / `TenantFieldCipherService`          | Implemented; explicit strict traversal and authenticated idempotency |
+| `EncryptPipe`                                 | `TenantEncryptFieldsPipe` from `/http`                     | Implemented; requires an already transformed DTO instance            |
+| `TransformResponseTo` + `DecryptInterceptor`  | `DecryptTenantFieldsAs` + `TenantDecryptFieldsInterceptor` | Implemented; handler-only opt-in response decryption                 |
+| `createFieldEncryptionExtension`              | `createTenantPrismaFieldEncryption` from `/prisma`         | Implemented; purpose registry, no caller-supplied plaintext DEK      |
+| `KmsKeyProvider` + tenant `EncryptedKeyStore` | named key providers + `TenantCryptoPolicy`                 | Implemented with local, AWS, GCP, Azure, and RSA wrapping providers  |
+| one-operation field encryption                | text batches and `protectTextBatch`                        | Implemented; one tenant/profile resolution and one batch key         |
+| application-specific serialization            | `CipherCodec<Value>` / validated `jsonCodec()`             | Implemented as an explicit typed boundary                            |
+
+The ciphertext formats are intentionally not interoperable. The referenced package documents
+AES-256-CBC ciphertext, while `@nestm/crypto` uses authenticated AES-256-GCM `nmc1` envelopes that bind
+the header, wrapped key, tenant namespace/identity, purpose, and caller AAD. Migrating stored values
+therefore requires decrypting them with the old library inside an audited migration and encrypting the
+plaintext with `@nestm/crypto`; relabeling or importing the old ciphertext is not supported.
+
+## Entry points
 
 | Entry point                  | Purpose                                                                       |
 | ---------------------------- | ----------------------------------------------------------------------------- |
 | `@nestm/crypto/core`         | AES-256-GCM engine, envelope codec, local AES KEK ring, contracts, and errors |
+| `@nestm/crypto/fields`       | purpose-decorated class traversal                                             |
+| `@nestm/crypto/tenant`       | tenant-bound cipher and field services                                        |
+| `@nestm/crypto/http`         | request-encryption pipe and opt-in response-decryption interceptor            |
+| `@nestm/crypto/prisma`       | schema-agnostic tenant Prisma write processor                                 |
 | `@nestm/crypto/key-wrap/rsa` | RSA-OAEP-SHA256 wrapping with named public/private keys                       |
 | `@nestm/crypto/kms/aws`      | AWS KMS data-key generation and decrypt                                       |
 | `@nestm/crypto/kms/gcp`      | Google Cloud KMS encrypt/decrypt with AAD and CRC32C validation               |

@@ -104,16 +104,49 @@ trigger a best-effort rollback.
 
 Legacy plaintext passthrough is an explicit migration option. It must never pass through a value that
 looks like a malformed, tampered, wrong-purpose, or cross-tenant envelope. Applications must ensure
-every persistence path invokes the field service; v1 intentionally does not claim transparent ORM or
-HTTP interception.
+every persistence path invokes the field service or an explicit integration adapter. The HTTP and
+Prisma subpaths cover only the routes and write shapes that an application deliberately registers;
+they do not make encryption transparent across every framework or database access path.
 
 Field plaintext beginning with the reserved `nmc` namespace is rejected even in migration mode; this
 prevents malformed or future envelope versions from being persisted as clear text.
+
+## HTTP adapter boundary
+
+`@nestm/crypto/http` does not validate request DTOs. The encryption pipe requires Nest validation and
+class transformation to have already produced a real DTO instance; ambiguous plain objects fail
+closed. Response decryption is opt-in through handler metadata and reconstructs the declared response
+DTO before field traversal. A decorated non-null response cannot silently bypass missing tenant
+context, malformed ciphertext, wrong-purpose ciphertext, or unsupported object shapes.
+
+Do not attach the response interceptor to streams, files, exception payloads, or routes whose response
+contract is not the declared DTO. Configure validation with `transform`, `whitelist`, and
+`forbidNonWhitelisted` according to the application's input policy.
+
+## Prisma adapter boundary
+
+`@nestm/crypto/prisma` is a schema-agnostic write-argument processor, not an automatic schema scanner
+or read interceptor. Its application-owned registry assigns a stable purpose to every protected
+model field. Existing `nmc` values authenticate under the active tenant and field purpose before an
+idempotent write accepts them; envelope shape or `inspect()` metadata alone is never sufficient.
+
+The processor never accepts a raw or encoded plaintext data key. It completes traversal and
+cryptographic work before committing encrypted strings to caller-owned Prisma arguments, with
+best-effort rollback if assignment is rejected. Applications remain responsible for invoking it on
+every registered write path and for separately decrypting data at a DTO or service boundary.
+
+The registry binds ciphertext to the tenant, application namespace, and field purpose, but not to a
+specific database row. Like other AEAD schemes, it does not prevent replaying a valid envelope into a
+different row that uses the same purpose in the same tenant. Applications that require row binding
+must use an explicit service boundary with stable row-specific AAD; a future Prisma AAD-resolver API
+would need to define update/upsert identity and migration behavior before offering that guarantee.
 
 ## Operational guidance
 
 - Put stable, domain-specific data classification in `purpose`; never use request IDs or mutable labels.
 - Keep caller AAD reproducible for as long as ciphertext must remain decryptable.
+- Keep `maxPayloadBytes`, `maxBatchItems`, and `maxBatchBytes` aligned with endpoint limits. Defaults
+  bound a batch to 256 items and 10 MiB of aggregate plaintext/ciphertext.
 - Monitor authentication failures and provider failures without logging values or native SDK payloads.
 - Test key rotation and disaster recovery with representative ciphertext before retiring a key.
 - Bound input sizes before accepting untrusted ciphertext; the library is buffered and not a streaming

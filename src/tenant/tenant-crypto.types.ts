@@ -54,6 +54,28 @@ export interface TenantCipherOperationOptions {
 	readonly signal?: AbortSignal;
 }
 
+export interface TenantBatchOptions {
+	readonly signal?: AbortSignal;
+}
+
+export interface TenantBatchEncryptTextItem {
+	readonly plaintext: string;
+	readonly purpose: string;
+	readonly aad?: CipherAad;
+}
+
+export interface TenantBatchDecryptTextItem {
+	readonly envelope: string;
+	readonly purpose: string;
+	readonly aad?: CipherAad;
+}
+
+export interface TenantProtectTextItem {
+	readonly value: string;
+	readonly purpose: string;
+	readonly aad?: CipherAad;
+}
+
 export interface TenantFieldCipherOptions {
 	readonly aad?: CipherAad;
 	readonly signal?: AbortSignal;
