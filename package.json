@@ -65,6 +65,11 @@
 			"import": "./dist/prisma/index.mjs",
 			"default": "./dist/prisma/index.mjs"
 		},
+		"./keys": {
+			"types": "./dist/keys/index.d.mts",
+			"import": "./dist/keys/index.mjs",
+			"default": "./dist/keys/index.mjs"
+		},
 		"./key-wrap/rsa": {
 			"types": "./dist/key-wrap/rsa/index.d.mts",
 			"import": "./dist/key-wrap/rsa/index.mjs",
