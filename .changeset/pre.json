@@ -5,6 +5,7 @@
     "@nestm/crypto": "0.1.0-alpha.0"
   },
   "changesets": [
+    "azure-wrapping-context-fail-closed",
     "initial-crypto-release",
     "recipient-addressed-seal",
     "secure-field-adapters"
