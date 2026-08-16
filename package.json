@@ -1,6 +1,6 @@
 {
 	"name": "@nestm/crypto",
-	"version": "0.1.0-alpha.2",
+	"version": "0.1.0-alpha.3",
 	"description": "Authenticated encryption for NestJS 12 with AES-256-GCM, envelope key providers, tenant isolation, and HTTP/Prisma field adapters.",
 	"license": "MIT",
 	"author": "nestm",

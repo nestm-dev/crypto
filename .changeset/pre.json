@@ -8,6 +8,7 @@
     "azure-wrapping-context-fail-closed",
     "initial-crypto-release",
     "recipient-addressed-seal",
-    "secure-field-adapters"
+    "secure-field-adapters",
+    "zero-access-key-hierarchy-primitives"
   ]
 }
