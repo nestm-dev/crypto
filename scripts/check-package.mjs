@@ -7,6 +7,7 @@ const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const expectedExports = [
 	".",
 	"./core",
+	"./files",
 	"./fields",
 	"./tenant",
 	"./http",
