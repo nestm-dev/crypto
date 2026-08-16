@@ -45,6 +45,11 @@
 			"import": "./dist/core/index.mjs",
 			"default": "./dist/core/index.mjs"
 		},
+		"./files": {
+			"types": "./dist/files/index.d.mts",
+			"import": "./dist/files/index.mjs",
+			"default": "./dist/files/index.mjs"
+		},
 		"./fields": {
 			"types": "./dist/fields/index.d.mts",
 			"import": "./dist/fields/index.mjs",
@@ -121,13 +126,14 @@
 		"check": "pnpm run lint && pnpm run format:check && pnpm run typecheck",
 		"test": "pnpm run test:unit",
 		"test:unit": "vitest run --config vitest.config.ts",
+		"test:vectors": "node scripts/verify-nmf1-vectors.mjs",
 		"test:watch": "vitest --config vitest.config.ts",
 		"test:coverage": "vitest run --config vitest.config.ts --coverage",
 		"test:live": "vitest run --config vitest.live.config.ts",
 		"test:packed": "node scripts/test-packed-consumers.mjs",
 		"verify:package": "node scripts/check-package.mjs && publint --strict && attw --pack . --profile esm-only",
 		"verify:pack": "pnpm run build && pnpm run verify:package && pnpm run test:packed",
-		"verify": "pnpm run check && pnpm run test && pnpm run verify:pack",
+		"verify": "pnpm run check && pnpm run test && pnpm run test:vectors && pnpm run verify:pack",
 		"prepack": "pnpm run build",
 		"changeset": "changeset",
 		"version-packages": "changeset version",

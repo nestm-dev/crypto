@@ -127,6 +127,58 @@ await engine.close();
 The generated key in this example is intentionally ephemeral. Persisted data would become
 undecryptable after restart; production applications need a durable wrapping key or KMS provider.
 
+## Streaming encrypted files
+
+`@nestm/crypto/files` implements the NMF1 immutable-file format without importing NestJS, a database,
+or an object-storage SDK. It accepts a Web `ReadableStream<Uint8Array>` or an
+`AsyncIterable<Uint8Array>`, applies backpressure, and uses fixed 1 MiB authenticated frames so large
+files are never buffered as one value.
+
+The engine uses a fixed frame accumulator and retains at most one caller-owned source yield while
+draining it. Generic live memory is therefore bounded by one frame plus the largest upstream yield;
+applications that accept untrusted or SDK-provided streams should re-chunk source yields to at most
+1 MiB before encryption or decryption.
+
+```ts
+import { generateKeySync } from "node:crypto";
+import { AesKeyRingProvider } from "@nestm/crypto/core";
+import { FileCipherEngine } from "@nestm/crypto/files";
+
+const provider = new AesKeyRingProvider({
+	activeKeyId: "workspace-domain-v1",
+	keys: { "workspace-domain-v1": generateKeySync("aes", { length: 256 }) },
+});
+const files = new FileCipherEngine({
+	defaultProvider: "workspace",
+	providers: [{ name: "workspace", provider }],
+	maxPlaintextBytes: 10n * 1024n * 1024n * 1024n,
+});
+
+declare const source: AsyncIterable<Uint8Array>;
+declare const canonicalFileAad: Uint8Array;
+declare function uploadCiphertext(stream: ReadableStream<Uint8Array>): Promise<void>;
+const result = await files.encrypt(source, { aad: canonicalFileAad });
+
+// Persist result.detachedKey, result.headerBytes, and result.wrappingContextDigest before
+// consuming result.encrypted and uploading its first byte.
+let summary: Awaited<typeof result.completion>;
+try {
+	[summary] = await Promise.all([result.completion, uploadCiphertext(result.encrypted)]);
+} catch (error) {
+	await result.cancel(error);
+	throw error;
+}
+```
+
+The object bytes contain only the clear NMF1 framing plus ciphertext and authentication tags. The
+wrapped file key is detached for an authorized catalog. Decryption requires the caller-supplied AAD,
+an explicitly allowed provider, and—where a catalog exists—the exact expected 52-byte header.
+Completion/verification also authenticates the mandatory final frame and physical EOF.
+
+An authenticated full frame may be emitted before a later frame or EOF fails. A download may stream
+that authenticated prefix and abort on failure, but agents, previews, archive/skill validation, and
+other side-effecting consumers must stage all plaintext until `verification` resolves.
+
 ## Operations
 
 Both `CipherService` and `CipherEngine` provide:
@@ -595,6 +647,7 @@ plaintext with `@nestm/crypto`; relabeling or importing the old ciphertext is no
 | Entry point                  | Purpose                                                                       |
 | ---------------------------- | ----------------------------------------------------------------------------- |
 | `@nestm/crypto/core`         | AES-256-GCM engine, envelope codec, local AES KEK ring, contracts, and errors |
+| `@nestm/crypto/files`        | NMF1 bounded-memory streaming file encryption with detached wrapped keys      |
 | `@nestm/crypto/fields`       | purpose-decorated class traversal                                             |
 | `@nestm/crypto/tenant`       | tenant-bound cipher and field services                                        |
 | `@nestm/crypto/http`         | request-encryption pipe and opt-in response-decryption interceptor            |

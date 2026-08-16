@@ -149,6 +149,12 @@ would need to define update/upsert identity and migration behavior before offeri
   bound a batch to 256 items and 10 MiB of aggregate plaintext/ciphertext.
 - Monitor authentication failures and provider failures without logging values or native SDK payloads.
 - Test key rotation and disaster recovery with representative ciphertext before retiring a key.
-- Bound input sizes before accepting untrusted ciphertext; the library is buffered and not a streaming
-  encryption format.
+- Bound input sizes before accepting untrusted ciphertext. `nmc1` field/value operations are buffered;
+  use the separate NMF1 `@nestm/crypto/files` format for bounded-memory immutable-file streams.
+- Bound each upstream NMF1 source yield as well as the complete file. The engine does not clone a
+  merged source yield, but must retain that caller-owned chunk while draining it; re-chunk untrusted
+  or provider streams to at most the 1 MiB NMF1 frame size.
+- A successful NMF1 frame authenticates only that frame. Treat the complete file as verified only
+  after the final frame, declared totals, expected size/hash, and physical EOF authenticate. Buffer or
+  stage agent, preview, skill, archive, copy, and other side-effecting consumers until verification.
 - Run credential-gated live tests only against disposable provider resources.
