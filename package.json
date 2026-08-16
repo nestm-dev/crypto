@@ -70,6 +70,16 @@
 			"import": "./dist/keys/index.mjs",
 			"default": "./dist/keys/index.mjs"
 		},
+		"./password": {
+			"types": "./dist/password/index.d.mts",
+			"import": "./dist/password/index.mjs",
+			"default": "./dist/password/index.mjs"
+		},
+		"./stream": {
+			"types": "./dist/stream/index.d.mts",
+			"import": "./dist/stream/index.mjs",
+			"default": "./dist/stream/index.mjs"
+		},
 		"./key-wrap/rsa": {
 			"types": "./dist/key-wrap/rsa/index.d.mts",
 			"import": "./dist/key-wrap/rsa/index.mjs",

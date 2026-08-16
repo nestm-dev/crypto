@@ -567,6 +567,150 @@ function createTenantPrismaFieldEncryption(
 ): TenantPrismaWriteProcessor;
 ```
 
+## Key hierarchies
+
+`@nestm/crypto/keys`, `@nestm/crypto/password`, and `@nestm/crypto/stream` are framework-neutral
+building blocks for key hierarchies where the server holds no long-lived master key: a password
+unlocks a user key, user keys hold grants to shared keys, and shared keys protect per-object data
+keys. They are independent of `CipherEngine` and `DataKeyProvider`.
+
+### Asymmetric keys and sealed boxes — `@nestm/crypto/keys`
+
+```ts
+import { generateX25519KeyPair, sealTo, openKeyFrom, hkdfSha256 } from "@nestm/crypto/keys";
+
+const recipient = generateX25519KeyPair();
+// Sealing needs only the public key, so a writer never needs the recipient online.
+const sealed = sealTo(recipient.publicKey, dataKey, { info: "wsk.seal", aad: "epoch:1" });
+const recovered = openKeyFrom(recipient.privateKey, sealed, { info: "wsk.seal", aad: "epoch:1" });
+```
+
+`sealTo` uses ephemeral-static X25519 → HKDF-SHA256 → AES-256-GCM, binds the recipient public key
+into the key schedule, derives the nonce (never transmitting it), and caps payloads at 64 KiB — it
+is a key-wrapping primitive, not a data cipher.
+
+### Key-wrap records
+
+A single versioned record covers both wrapping flavours, so a grant table or a file header can
+carry a heterogeneous list of them:
+
+```ts
+import {
+	wrapKeyWithSecret,
+	wrapKeyToRecipient,
+	encodeKeyWrapRecords,
+	decodeKeyWrapRecords,
+	selectKeyWrapRecord,
+	unwrapKeyFromRecipient,
+} from "@nestm/crypto/keys";
+
+const grants = [
+	wrapKeyToRecipient(alicePublicKey, workspaceKey, { recipientId: "user:alice" }),
+	wrapKeyWithSecret(orgKek, workspaceKey, { recipientId: "org:acme" }),
+];
+const stored = encodeKeyWrapRecords(grants);
+
+const mine = selectKeyWrapRecord(decodeKeyWrapRecords(stored), {
+	recipientType: "x25519",
+	recipientId: "user:alice",
+});
+const workspaceKeyAgain = unwrapKeyFromRecipient(alicePrivateKey, mine!);
+```
+
+The algorithm, recipient type, and recipient identifier are authenticated, so a record cannot be
+retargeted at a different recipient even under the same wrapping key.
+
+### Password-derived keys — `@nestm/crypto/password`
+
+```ts
+import {
+	createPasswordKdf,
+	generatePasswordSalt,
+	encodePasswordKdfParams,
+	PASSWORD_KDF_SCRYPT_DEFAULT,
+} from "@nestm/crypto/password";
+
+const kdf = createPasswordKdf(); // scrypt N=2^16, r=8, p=1; at most 4 concurrent derivations
+const salt = generatePasswordSalt();
+const kek = await kdf.derive({
+	password,
+	salt,
+	kdf: PASSWORD_KDF_SCRYPT_DEFAULT,
+	info: "umk.password", // domain separation; the same password yields unrelated keys per purpose
+});
+// Persist the salt and encodePasswordKdfParams(PASSWORD_KDF_SCRYPT_DEFAULT) beside the wrap.
+```
+
+Parameters are versioned per record, so a stored key can be re-wrapped under stronger parameters
+later without a format change. Registering an Argon2id implementation of `PasswordKdfAlgorithm`
+requires no format change either; the default stays dependency-free.
+
+Recovery codes are full-entropy secrets, so they derive through HKDF rather than a memory-hard KDF:
+
+```ts
+import { generateRecoveryCode, parseRecoveryCode, deriveRecoveryKey } from "@nestm/crypto/password";
+
+// ASR1-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX — display once, never store the code itself
+const { code, secret } = generateRecoveryCode();
+const recoveryKek = deriveRecoveryKey(secret, recoverySalt, "umk.recovery");
+// later
+const recoveryKekAgain = deriveRecoveryKey(
+	parseRecoveryCode(userInput),
+	recoverySalt,
+	"umk.recovery",
+);
+```
+
+Store only the wrap the code produces. Persisting a verifier hash would hand an offline oracle to
+anyone who reads the database.
+
+### Chunked files — `@nestm/crypto/stream`
+
+`nmcs1` is a self-contained container: a fixed 512-byte authenticated header followed by
+AES-256-GCM chunks (1 MiB by default, 20 bytes of framing overhead each).
+
+```ts
+import { sealChunked, openChunked, inspectChunked } from "@nestm/crypto/stream";
+
+const sealed = sealChunked(dataKey, plaintext, {
+	keyReference: "ws:1f9e:e1",
+	aad: "org:acme|ws:1f9e", // binds the object to its location; a relocated copy fails to open
+	wrapRecords: [wrapKeyToRecipient(workspacePublicKey, dataKey, { recipientId: "ws:1f9e" })],
+});
+
+const header = inspectChunked(sealed); // framing metadata only — nothing is authenticated yet
+const plaintextAgain = openChunked(dataKey, sealed, { aad: "org:acme|ws:1f9e" });
+```
+
+Large payloads use the Web-Streams form, which is byte-identical to the buffered form when
+`plaintextLength` is declared (`sealChunked` always knows the length; a stream does not, so an
+undeclared stream records the length as absent):
+
+```ts
+import { createChunkedSealStream, createChunkedOpenStream } from "@nestm/crypto/stream";
+
+await source.pipeThrough(createChunkedSealStream(dataKey, { keyReference })).pipeTo(destination);
+await ciphertext.pipeThrough(createChunkedOpenStream(dataKey)).pipeTo(sink);
+```
+
+`createChunkedOpenStream` emits an **authenticated prefix**: every chunk is verified before it is
+emitted, but truncation is only detected at end of stream. Consumers that must not act on a partial
+payload should use `openChunked`.
+
+Because the header is fixed-size and every chunk but the last is full, sizes convert exactly in both
+directions without reading the object — useful for reporting plaintext sizes from a storage listing:
+
+```ts
+import { chunkedCiphertextLength, chunkedPlaintextLength } from "@nestm/crypto/stream";
+
+chunkedCiphertextLength(1_234); // 1_766
+chunkedPlaintextLength(1_766); // 1_234 (undefined when the size is not one the format can produce)
+```
+
+Nonces are derived per chunk from the data key, a per-object random file identifier, and a hash of
+the header; no counter is persisted anywhere, so restoring a database to an earlier point in time
+cannot cause nonce reuse.
+
 ## `nestjs-field-encryption` compatibility map
 
 This package now covers the integration surfaces demonstrated by
@@ -595,6 +739,9 @@ plaintext with `@nestm/crypto`; relabeling or importing the old ciphertext is no
 | Entry point                  | Purpose                                                                       |
 | ---------------------------- | ----------------------------------------------------------------------------- |
 | `@nestm/crypto/core`         | AES-256-GCM engine, envelope codec, local AES KEK ring, contracts, and errors |
+| `@nestm/crypto/keys`         | X25519 keys, HKDF-SHA256, sealed boxes, key-wrap records, HMAC helpers        |
+| `@nestm/crypto/password`     | password-derived key-encryption keys and display-once recovery codes          |
+| `@nestm/crypto/stream`       | `nmcs1` chunked AES-256-GCM container for buffered and streaming payloads     |
 | `@nestm/crypto/fields`       | purpose-decorated class traversal                                             |
 | `@nestm/crypto/tenant`       | tenant-bound cipher and field services                                        |
 | `@nestm/crypto/http`         | request-encryption pipe and opt-in response-decryption interceptor            |

@@ -141,6 +141,83 @@ different row that uses the same purpose in the same tenant. Applications that r
 must use an explicit service boundary with stable row-specific AAD; a future Prisma AAD-resolver API
 would need to define update/upsert identity and migration behavior before offering that guarantee.
 
+## Chunked stream boundary
+
+`@nestm/crypto/stream` (`nmcs1`) protects whole objects, buffered or streamed.
+
+- The 512-byte header is authenticated by its own tag and hashed into the chunk key schedule, so a
+  change to the key reference, chunk size, context associated data, or inline wrap records makes
+  every chunk fail authentication. Header padding must be zero and reserved flag bits must be clear.
+- Each chunk's nonce is `noncePrefix ‖ chunkIndex ‖ finalFlag`, where the prefix derives from the
+  data key and a per-object random 16-byte file identifier. **No nonce input is ever persisted or
+  read back from storage.** A counter written to a database and later restored to an earlier point
+  in time — by point-in-time recovery, a replica promotion, or a restored backup — would reissue
+  nonces under the same key and break AES-GCM catastrophically. Any future change to this format
+  must preserve that property: nonces come from a CSPRNG draw or from an HKDF over per-object
+  random material, never from durable mutable state.
+- The final chunk is flagged in both its nonce and its associated data, so truncation, chunk
+  reordering, and splicing chunks between objects all fail authentication rather than yielding a
+  short or wrong plaintext.
+- `createChunkedOpenStream` emits an **authenticated prefix**. Each chunk is verified before it is
+  emitted, but truncation is only detectable at end of stream, so a consumer acting on partial
+  output may act on a prefix of the plaintext. Use `openChunked` where all-or-nothing semantics are
+  required, and treat a stream that errors mid-flight as having produced nothing.
+- `inspectChunked` reports framing only and marks itself `authenticated: false`. Never make a trust
+  decision on its output.
+- The context associated data in the header is **not encrypted**. Bind location and ownership there
+  (organization, workspace, object key); never put secrets in it.
+- Bound `maxPlaintextBytes` and `maxChunkSizeLog2` when opening untrusted ciphertext; a hostile
+  header can otherwise declare a chunk size far larger than the reader intends to buffer.
+- The chunk-size ceiling is symmetric: sealing and opening both default to `2^24`, so the
+  library never writes an object that a default reader would refuse. Exponents of 25 and 26
+  exist in the format but require `maxChunkSizeLog2` on the seal side _and_ the open side;
+  an object written above the default is unreadable to a caller that has not opted in.
+- The per-object file identifier is drawn from the CSPRNG on every seal and is deliberately
+  not settable through `ChunkedSealOptions`. It is the only per-object input to the key
+  schedule, so reusing one under the same data key would repeat a chunk key and nonce
+  prefix — exposing the XOR of two plaintexts and leaking the header GMAC subkey. The
+  `@nestm/crypto/testing` seam that pins it exists solely to freeze format vectors and must
+  never be reachable from production code.
+- Never persist a nonce, a nonce counter, or a file identifier and replay it. Nonces here are
+  either drawn fresh or derived from a fresh per-object identifier, which is what makes a
+  database rollback (point-in-time restore, replica promotion) unable to cause nonce reuse.
+- `scrypt` parameters are bounded absolutely, not just per field: a derivation may not
+  reserve more than 1 GiB, and `maxmem` is capped independently of the caller. Combined with
+  the concurrency semaphore, this keeps a password-hardening parameter from becoming a
+  denial-of-service lever.
+
+## Password and recovery-code boundary
+
+`@nestm/crypto/password` derives key-encryption keys from user-supplied secrets.
+
+- scrypt is memory-hard by design: each derivation holds roughly `128 * N * r` bytes, which is
+  64 MiB at the shipped defaults. `createPasswordKdf` bounds concurrent derivations (default 4) to
+  keep a burst of sign-ins from exhausting memory; raise the limit only against measured headroom.
+- Parameters and salt are per-record and versioned. Re-derive and re-wrap on the next successful
+  authentication when policy strengthens; never reuse a salt across records.
+- Always pass `info` to separate purposes. Without it, the same password yields the same key for
+  every use.
+- Recovery secrets are full-entropy, so `deriveRecoveryKey` uses HKDF rather than a memory-hard KDF.
+  Store only the wrap the recovery key produces — persisting a verifier hash of the code creates an
+  offline oracle for anyone who reads the database.
+- Recovery codes are display-once. The library never retains one, and `parseRecoveryCode` fails
+  closed on any prefix, character, length, canonicality, or checksum deviation.
+- A derived key is a `KeyObject`. Node keeps that material outside the JavaScript heap, but it
+  cannot be wiped on demand; see the custody note below.
+
+## Key custody
+
+Unwrapped keys live only in process memory for as long as the application holds them.
+
+- The library zeroes its own intermediate buffers, but a resident `KeyObject` is released to the
+  runtime, not erased. Anything that can read process memory — a core dump, a heap snapshot, an
+  attached debugger, `--inspect` — is equivalent to holding the keys.
+- Disable core dumps and inspector ports in production, and keep key material out of logs, error
+  causes, and crash reporters.
+- Keys held for a session should have an explicit lifetime and be dropped on sign-out, session
+  revocation, and password change. Replicating them to a shared cache re-introduces a decryptable
+  copy at rest and weakens the model that per-user key derivation is there to provide.
+
 ## Operational guidance
 
 - Put stable, domain-specific data classification in `purpose`; never use request IDs or mutable labels.
@@ -149,6 +226,6 @@ would need to define update/upsert identity and migration behavior before offeri
   bound a batch to 256 items and 10 MiB of aggregate plaintext/ciphertext.
 - Monitor authentication failures and provider failures without logging values or native SDK payloads.
 - Test key rotation and disaster recovery with representative ciphertext before retiring a key.
-- Bound input sizes before accepting untrusted ciphertext; the library is buffered and not a streaming
-  encryption format.
+- Bound input sizes before accepting untrusted ciphertext. The `nmc1` envelope is buffered and not a
+  streaming format; use `@nestm/crypto/stream` for payloads that must not be held in memory whole.
 - Run credential-gated live tests only against disposable provider resources.

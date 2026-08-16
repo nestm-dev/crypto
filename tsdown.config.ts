@@ -9,6 +9,8 @@ export default defineConfig({
 		"src/http/index.ts",
 		"src/prisma/index.ts",
 		"src/keys/index.ts",
+		"src/password/index.ts",
+		"src/stream/index.ts",
 		"src/key-wrap/rsa/index.ts",
 		"src/kms/aws/index.ts",
 		"src/kms/gcp/index.ts",

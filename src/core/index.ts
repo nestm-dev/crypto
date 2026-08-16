@@ -16,7 +16,7 @@ export {
 	isCryptoError,
 	type CryptoErrorCode,
 } from "./errors.js";
-export { ENVELOPE_PREFIX } from "./envelope.js";
+export { ENVELOPE_PREFIX, isCipherEnvelope } from "./envelope.js";
 export { aadBytes, base64url, decodeUtf8, frame, parseBase64url, utf8 } from "./encoding.js";
 export type {
 	BatchDecryptItem,
