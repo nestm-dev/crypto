@@ -18,6 +18,32 @@ export function decodeUtf8(value: Uint8Array): string {
 	}
 }
 
+/**
+ * Byte views whose contents cannot change under us and whose length is trustworthy.
+ * Exotic subclasses, index-shadowing own properties, and `SharedArrayBuffer` backings are
+ * all rejected: each of them can turn a validated length into a lie before the bytes are
+ * consumed.
+ *
+ * @internal Shared by every boundary that accepts bulk caller data.
+ */
+export function isStableBytes(value: unknown): value is Uint8Array {
+	try {
+		if (!(value instanceof Uint8Array) || !ArrayBuffer.isView(value)) return false;
+		const prototype = Object.getPrototypeOf(value) as object | null;
+		if (prototype !== Uint8Array.prototype && prototype !== Buffer.prototype) return false;
+		if (
+			Reflect.ownKeys(value).some(
+				(key) => typeof key !== "string" || !/^(?:0|[1-9]\d*)$/u.test(key),
+			)
+		) {
+			return false;
+		}
+		return !(value.buffer instanceof SharedArrayBuffer) && Number.isSafeInteger(value.byteLength);
+	} catch {
+		return false;
+	}
+}
+
 export function aadBytes(value?: CipherAad): Uint8Array {
 	try {
 		if (value === undefined) return new Uint8Array();
