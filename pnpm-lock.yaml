@@ -36,8 +36,8 @@ importers:
         specifier: 12.0.0-alpha.5
         version: 12.0.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.0.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(reflect-metadata@0.2.2)(rxjs@7.8.2))
       '@nestm/tenant':
-        specifier: 0.1.0-alpha.3
-        version: 0.1.0-alpha.3(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.0.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/testing@12.0.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.0.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(reflect-metadata@0.2.2)(rxjs@7.8.2)))(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        specifier: 0.1.0-alpha.5
+        version: 0.1.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.0.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/testing@12.0.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.0.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(reflect-metadata@0.2.2)(rxjs@7.8.2)))(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@types/node':
         specifier: 24.13.3
         version: 24.13.3
@@ -383,8 +383,8 @@ packages:
       '@nestjs/platform-express':
         optional: true
 
-  '@nestm/tenant@0.1.0-alpha.3':
-    resolution: {integrity: sha512-n/OW80A2jU7SYozaYLyrQ3tvzXwcFOLh0XMg1y2CesiqdABtBmojN2tDbr6wI9aWqwDy3FhQLnoBKqwMZb7d6g==}
+  '@nestm/tenant@0.1.0-alpha.5':
+    resolution: {integrity: sha512-Ac/mxgnuLbAnDqBac85coK0ihDxAnWgXYwxuFB13je4TBNripJCWyJiiufwA8J2gcarGy7uo8Kscsvy8bOMDaQ==}
     engines: {node: '>=22.13.0'}
     peerDependencies:
       '@nestjs/common': ^12.0.0-alpha.5
@@ -2790,7 +2790,7 @@ snapshots:
       '@nestjs/core': 12.0.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(reflect-metadata@0.2.2)(rxjs@7.8.2)
       tslib: 2.8.1
 
-  '@nestm/tenant@0.1.0-alpha.3(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.0.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/testing@12.0.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.0.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(reflect-metadata@0.2.2)(rxjs@7.8.2)))(reflect-metadata@0.2.2)(rxjs@7.8.2)':
+  '@nestm/tenant@0.1.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.0.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/testing@12.0.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.0.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(reflect-metadata@0.2.2)(rxjs@7.8.2)))(reflect-metadata@0.2.2)(rxjs@7.8.2)':
     dependencies:
       '@nestjs/common': 12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0)
       '@nestjs/core': 12.0.0-alpha.5(@nestjs/common@12.0.0-alpha.5(class-transformer@0.5.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(reflect-metadata@0.2.2)(rxjs@7.8.2)
