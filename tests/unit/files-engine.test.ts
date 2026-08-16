@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
-import { createSecretKey, type KeyObject } from "node:crypto";
+import { createHash, createSecretKey, type KeyObject } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+	AesKeyRingProvider,
 	authenticationFailed,
 	CryptoError,
 	type DataKeyContext,
@@ -29,7 +30,9 @@ interface FixtureVector {
 	readonly keyReference: string;
 	readonly wrappingAlgorithm: string;
 	readonly expectedHeader: Uint8Array;
-	readonly expectedNmf1: Uint8Array;
+	readonly expectedNmf1: Uint8Array | undefined;
+	readonly expectedCiphertextBytes: bigint;
+	readonly expectedDataFrameCount: number;
 	readonly wrappingContextDigest: string;
 	readonly ciphertextSha256: string;
 }
@@ -66,6 +69,32 @@ function text(value: unknown, label: string): string {
 	return value;
 }
 
+function integer(value: unknown, label: string): number {
+	if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+		throw new TypeError(`${label} is not a safe integer.`);
+	}
+	return value;
+}
+
+function vectorPlaintext(input: Record<string, unknown>): Uint8Array {
+	if (typeof input["plaintextHex"] === "string") return bytes(input["plaintextHex"]);
+	const generator = record(input["plaintextGenerator"], "plaintext generator");
+	if (text(generator["algorithm"], "plaintext generator algorithm") !== "affine-byte-v1") {
+		throw new TypeError("Unsupported plaintext generator.");
+	}
+	const length = Number(BigInt(text(generator["length"], "plaintext generator length")));
+	if (!Number.isSafeInteger(length) || length < 0) {
+		throw new TypeError("Plaintext generator length is invalid.");
+	}
+	if (
+		integer(generator["multiplier"], "plaintext generator multiplier") !== 131 ||
+		integer(generator["increment"], "plaintext generator increment") !== 17
+	) {
+		throw new TypeError("Plaintext generator parameters are non-canonical.");
+	}
+	return pattern(length);
+}
+
 function loadVector(filename: string): FixtureVector {
 	const parsed: unknown = JSON.parse(
 		readFileSync(new URL(`../vectors/nmf1/${filename}`, import.meta.url), "utf8"),
@@ -73,9 +102,10 @@ function loadVector(filename: string): FixtureVector {
 	const root = record(parsed, "vector");
 	const input = record(root["input"], "vector input");
 	const expected = record(root["expected"], "vector expected");
+	const nmf1Hex = expected["nmf1Hex"];
 	return {
 		name: text(root["name"], "vector name"),
-		plaintext: bytes(text(input["plaintextHex"], "plaintext")),
+		plaintext: vectorPlaintext(input),
 		aad: bytes(text(input["fileAadHex"], "AAD")),
 		dek: bytes(text(input["dekHex"], "DEK")),
 		noncePrefix: bytes(text(input["noncePrefixHex"], "nonce prefix")),
@@ -84,7 +114,9 @@ function loadVector(filename: string): FixtureVector {
 		keyReference: text(input["keyReference"], "key reference"),
 		wrappingAlgorithm: text(expected["wrappingAlgorithm"], "wrapping algorithm"),
 		expectedHeader: bytes(text(expected["headerHex"], "header")),
-		expectedNmf1: bytes(text(expected["nmf1Hex"], "NMF1 object")),
+		expectedNmf1: typeof nmf1Hex === "string" ? bytes(nmf1Hex) : undefined,
+		expectedCiphertextBytes: BigInt(text(expected["ciphertextBytes"], "ciphertext bytes")),
+		expectedDataFrameCount: integer(expected["dataFrameCount"], "data frame count"),
 		wrappingContextDigest: text(expected["wrappingContextDigest"], "context digest"),
 		ciphertextSha256: text(expected["ciphertextSha256"], "ciphertext digest"),
 	};
@@ -213,6 +245,34 @@ class BlockingDataKeyProvider implements DataKeyProvider {
 	}
 }
 
+class RecordingDataKeyProvider implements DataKeyProvider {
+	readonly #delegate: DataKeyProvider;
+	readonly #generatedKeyFingerprints: string[] = [];
+
+	constructor(delegate: DataKeyProvider) {
+		this.#delegate = delegate;
+	}
+
+	get generatedKeyFingerprints(): readonly string[] {
+		return this.#generatedKeyFingerprints;
+	}
+
+	async generateDataKey(context: DataKeyContext): Promise<GeneratedDataKey> {
+		const generated = await this.#delegate.generateDataKey(context);
+		const raw = Buffer.from(generated.plaintextKey.export());
+		try {
+			this.#generatedKeyFingerprints.push(createHash("sha256").update(raw).digest("hex"));
+		} finally {
+			raw.fill(0);
+		}
+		return generated;
+	}
+
+	unwrapDataKey(dataKey: WrappedDataKey, context: DataKeyContext): Promise<KeyObject> {
+		return this.#delegate.unwrapDataKey(dataKey, context);
+	}
+}
+
 function harness(
 	options: {
 		readonly providerName?: string;
@@ -259,6 +319,29 @@ async function* fragmented(
 	if (value.byteLength === 0) yield new Uint8Array();
 }
 
+async function* seededFragments(value: Uint8Array, seed: number): AsyncGenerator<Uint8Array> {
+	let state = seed >>> 0;
+	let offset = 0;
+	let first = true;
+	yield new Uint8Array();
+	while (offset < value.byteLength) {
+		state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+		if ((state & 7) === 0) yield new Uint8Array();
+		const randomWidth = 1 + (state % 131_071);
+		const width =
+			first && value.byteLength > 1 ? Math.min(randomWidth, value.byteLength - 1) : randomWidth;
+		const end = Math.min(value.byteLength, offset + width);
+		yield value.subarray(offset, end);
+		offset = end;
+		first = false;
+	}
+}
+
+async function* splitAt(value: Uint8Array, split: number): AsyncGenerator<Uint8Array> {
+	yield value.subarray(0, split);
+	yield value.subarray(split);
+}
+
 async function* merged(
 	value: Uint8Array,
 	onNext: () => void = () => undefined,
@@ -277,6 +360,11 @@ async function* byteFragments(value: Uint8Array): AsyncGenerator<Uint8Array> {
 async function* failingSource(): AsyncGenerator<Uint8Array> {
 	yield Uint8Array.of(1, 2, 3);
 	throw new Error("source sentinel");
+}
+
+async function* failingAfter(value: Uint8Array): AsyncGenerator<Uint8Array> {
+	yield value;
+	throw new Error("retry sentinel");
 }
 
 function webSource(chunks: readonly Uint8Array[]): WebSourceProbe {
@@ -340,6 +428,22 @@ function flip(source: Uint8Array, index: number): Uint8Array {
 	return copy;
 }
 
+function overwrite(source: Uint8Array, offset: number, values: readonly number[]): Uint8Array {
+	const copy = new Uint8Array(source);
+	copy.set(values, offset);
+	return copy;
+}
+
+function deterministicBytes(length: number, seed: number): Uint8Array {
+	let state = seed >>> 0;
+	const output = new Uint8Array(length);
+	for (let index = 0; index < length; index += 1) {
+		state = (Math.imul(state, 1_103_515_245) + 12_345) >>> 0;
+		output[index] = state >>> 24;
+	}
+	return output;
+}
+
 async function expectStreamFailure(
 	engine: FileCipherEngine,
 	ciphertext: Uint8Array,
@@ -356,6 +460,10 @@ describe("FileCipherEngine", () => {
 		"V01-empty.json",
 		"V02-one-byte.json",
 		"V03-mixed-binary.json",
+		"V04-chunk-minus-one.json",
+		"V05-exact-chunk.json",
+		"V06-chunk-plus-one.json",
+		"V07-two-chunks-plus-seventeen.json",
 		"V08-null-workspace.json",
 		"V09a-owner-context-a.json",
 		"V09b-owner-context-b.json",
@@ -369,7 +477,7 @@ describe("FileCipherEngine", () => {
 			wrappingAlgorithm: vector.wrappingAlgorithm,
 			noncePrefix: vector.noncePrefix,
 		});
-		const encrypted = await engine.encrypt(fragmented(vector.plaintext), {
+		const encrypted = await engine.encrypt(seededFragments(vector.plaintext, 0x4e4d_4631), {
 			aad: vector.aad,
 			expectedPlaintextBytes: BigInt(vector.plaintext.byteLength),
 		});
@@ -377,14 +485,17 @@ describe("FileCipherEngine", () => {
 		expect(encrypted.detachedKey.wrappedKey).toEqual(vector.wrappedKey);
 		expect(encrypted.wrappingContextDigest).toBe(vector.wrappingContextDigest);
 		const ciphertext = await readAll(encrypted.encrypted);
-		expect(ciphertext).toEqual(vector.expectedNmf1);
+		if (vector.expectedNmf1 !== undefined) expect(ciphertext).toEqual(vector.expectedNmf1);
+		expect(BigInt(ciphertext.byteLength)).toBe(vector.expectedCiphertextBytes);
+		expect(createHash("sha256").update(ciphertext).digest("hex")).toBe(vector.ciphertextSha256);
 		await expect(encrypted.completion).resolves.toMatchObject({
 			plaintextBytes: BigInt(vector.plaintext.byteLength),
-			ciphertextBytes: BigInt(vector.expectedNmf1.byteLength),
+			ciphertextBytes: vector.expectedCiphertextBytes,
+			dataFrameCount: vector.expectedDataFrameCount,
 			ciphertextSha256: vector.ciphertextSha256,
 		});
 
-		const decrypted = await engine.decrypt(fragmented(ciphertext, [1, 2, 3, 5, 8, 13]), {
+		const decrypted = await engine.decrypt(seededFragments(ciphertext, 0x9e37_79b9), {
 			aad: vector.aad,
 			detachedKey: encrypted.detachedKey,
 			allowedProviders: [vector.provider],
@@ -400,6 +511,118 @@ describe("FileCipherEngine", () => {
 		});
 		expect(provider.generateCalls).toBe(1);
 		expect(provider.unwrapCalls).toBe(1);
+		await engine.close();
+	});
+
+	it.each(["V01-empty.json", "V02-one-byte.json", "V03-mixed-binary.json"])(
+		"accepts every source and ciphertext split point for %s",
+		async (filename) => {
+			const vector = loadVector(filename);
+			if (vector.expectedNmf1 === undefined) throw new Error("Small vector lacks exact bytes.");
+			for (let split = 0; split <= vector.plaintext.byteLength; split += 1) {
+				const { engine } = harness({
+					providerName: vector.provider,
+					dek: vector.dek,
+					wrappedKey: vector.wrappedKey,
+					keyReference: vector.keyReference,
+					wrappingAlgorithm: vector.wrappingAlgorithm,
+					noncePrefix: vector.noncePrefix,
+				});
+				const encrypted = await engine.encrypt(splitAt(vector.plaintext, split), {
+					aad: vector.aad,
+				});
+				expect(await readAll(encrypted.encrypted)).toEqual(vector.expectedNmf1);
+				await encrypted.completion;
+				await engine.close();
+			}
+
+			for (let split = 0; split <= vector.expectedNmf1.byteLength; split += 1) {
+				const { engine } = harness({
+					providerName: vector.provider,
+					dek: vector.dek,
+					wrappedKey: vector.wrappedKey,
+					keyReference: vector.keyReference,
+					wrappingAlgorithm: vector.wrappingAlgorithm,
+					noncePrefix: vector.noncePrefix,
+				});
+				const primed = await engine.encrypt(splitAt(new Uint8Array(), 0), { aad: vector.aad });
+				await readAll(primed.encrypted);
+				await primed.completion;
+				const decrypted = await engine.decrypt(splitAt(vector.expectedNmf1, split), {
+					aad: vector.aad,
+					detachedKey: {
+						version: 1,
+						provider: vector.provider,
+						keyReference: vector.keyReference,
+						wrappingAlgorithm: vector.wrappingAlgorithm,
+						wrappedKey: vector.wrappedKey,
+					},
+					allowedProviders: [vector.provider],
+					expectedHeaderBytes: vector.expectedHeader,
+				});
+				expect(await readAll(decrypted.plaintext)).toEqual(vector.plaintext);
+				await decrypted.verification;
+				await engine.close();
+			}
+		},
+	);
+
+	it("V10 uses fresh production randomness for every retry attempt", async () => {
+		const provider = new RecordingDataKeyProvider(
+			new AesKeyRingProvider({
+				activeKeyId: "domain-key-v1",
+				keys: { "domain-key-v1": Uint8Array.from({ length: 32 }, (_, index) => index + 1) },
+			}),
+		);
+		const engine = new FileCipherEngine({
+			providers: [{ name: "nestm-domain", provider }],
+			defaultProvider: "nestm-domain",
+			maxPlaintextBytes: BigInt(NMF1_CHUNK_BYTES),
+		});
+		const plaintext = pattern(4_097);
+		const failed = await engine.encrypt(failingAfter(plaintext), { aad: DEFAULT_AAD });
+		await expect(readAll(failed.encrypted)).rejects.toMatchObject({ code: "CIPHER_FAILURE" });
+		await expect(failed.completion).rejects.toMatchObject({ code: "CIPHER_FAILURE" });
+		const first = await engine.encrypt(fragmented(plaintext), { aad: DEFAULT_AAD });
+		const firstCiphertext = await readAll(first.encrypted);
+		await first.completion;
+		const second = await engine.encrypt(fragmented(plaintext), { aad: DEFAULT_AAD });
+		const secondCiphertext = await readAll(second.encrypted);
+		await second.completion;
+
+		expect(provider.generatedKeyFingerprints).toHaveLength(3);
+		expect(new Set(provider.generatedKeyFingerprints).size).toBe(3);
+		const attempts = [failed, first, second] as const;
+		expect(
+			new Set(attempts.map((attempt) => Buffer.from(attempt.header.noncePrefix).toString("hex")))
+				.size,
+		).toBe(3);
+		expect(
+			new Set(
+				attempts.map((attempt) =>
+					Buffer.from(attempt.detachedKey.wrappedKey.subarray(1, 13)).toString("hex"),
+				),
+			).size,
+		).toBe(3);
+		expect(
+			new Set(
+				attempts.map((attempt) => Buffer.from(attempt.detachedKey.wrappedKey).toString("hex")),
+			).size,
+		).toBe(3);
+		expect(firstCiphertext).not.toEqual(secondCiphertext);
+		for (const [ciphertext, result] of [
+			[firstCiphertext, first],
+			[secondCiphertext, second],
+		] as const) {
+			const decrypted = await engine.decrypt(fragmented(ciphertext), {
+				aad: DEFAULT_AAD,
+				detachedKey: result.detachedKey,
+				allowedProviders: ["nestm-domain"],
+				expectedHeaderBytes: result.headerBytes,
+			});
+			expect(await readAll(decrypted.plaintext)).toEqual(plaintext);
+			await decrypted.verification;
+		}
 		await engine.close();
 	});
 
@@ -571,6 +794,64 @@ describe("FileCipherEngine", () => {
 			decryptInput(encrypted.detachedKey),
 			"MALFORMED_ENVELOPE",
 		);
+		await engine.close();
+	});
+
+	it("fails closed under bounded deterministic parser mutation and fragmentation fuzzing", async () => {
+		const { engine } = harness();
+		const plaintext = pattern(8_193);
+		const encrypted = await engine.encrypt(fragmented(plaintext), { aad: DEFAULT_AAD });
+		const ciphertext = await readAll(encrypted.encrypted);
+		const summary = await encrypted.completion;
+		const candidates: Uint8Array[] = [];
+		for (let index = 0; index < 24; index += 1) {
+			const length = (index * 8_191) % 65_537;
+			candidates.push(deterministicBytes(length, 0x6d2b_79f5 ^ index));
+		}
+		for (let index = 0; index < 48; index += 1) {
+			const tailLength = (index * 4_093) % 65_537;
+			candidates.push(
+				concatFileBytes(encrypted.headerBytes, deterministicBytes(tailLength, 0x85eb_ca6b ^ index)),
+			);
+		}
+		for (let index = 0; index < 48; index += 1) {
+			const position = (Math.imul(index + 1, 2_654_435_761) >>> 0) % ciphertext.byteLength;
+			candidates.push(flip(ciphertext, position));
+		}
+		const dataHeaderOffset = NMF1_HEADER_BYTES;
+		const finalHeaderOffset = NMF1_HEADER_BYTES + 12 + plaintext.byteLength + 16;
+		for (let offset = dataHeaderOffset; offset < dataHeaderOffset + 12; offset += 1) {
+			candidates.push(flip(ciphertext, offset));
+		}
+		for (let offset = finalHeaderOffset; offset < finalHeaderOffset + 16; offset += 1) {
+			candidates.push(flip(ciphertext, offset));
+		}
+		candidates.push(
+			overwrite(ciphertext, dataHeaderOffset + 8, [0xff, 0xff, 0xff, 0xff]),
+			overwrite(ciphertext, finalHeaderOffset + 4, [0xff, 0xff, 0xff, 0xff]),
+			overwrite(
+				ciphertext,
+				finalHeaderOffset + 8,
+				[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+			),
+		);
+		for (const [index, candidate] of candidates.entries()) {
+			let result;
+			try {
+				result = await engine.decrypt(seededFragments(candidate, 0xa5a5_0000 ^ index), {
+					...decryptInput(encrypted.detachedKey),
+					...(index < 24 ? {} : { expectedHeaderBytes: encrypted.headerBytes }),
+					expectedPlaintextBytes: BigInt(plaintext.byteLength),
+					expectedCiphertextBytes: BigInt(ciphertext.byteLength),
+					expectedCiphertextSha256: summary.ciphertextSha256,
+				});
+			} catch (error: unknown) {
+				expect(error).toBeInstanceOf(CryptoError);
+				continue;
+			}
+			await expect(readAll(result.plaintext)).rejects.toBeInstanceOf(CryptoError);
+			await expect(result.verification).rejects.toBeInstanceOf(CryptoError);
+		}
 		await engine.close();
 	});
 

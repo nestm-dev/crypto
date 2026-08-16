@@ -22,6 +22,53 @@ function parseHex(value, label) {
 	return Buffer.from(value, "hex");
 }
 
+function parseDecimalBytes(value, label) {
+	assert.equal(typeof value, "string", `${label} must be a decimal string`);
+	assert.match(value, /^(?:0|[1-9][0-9]*)$/, `${label} must be canonical decimal`);
+	const parsed = BigInt(value);
+	assert.ok(parsed <= BigInt(Number.MAX_SAFE_INTEGER), `${label} exceeds this verifier's limit`);
+	return Number(parsed);
+}
+
+function plaintextSource(input) {
+	const hasHex = Object.hasOwn(input, "plaintextHex");
+	const hasGenerator = Object.hasOwn(input, "plaintextGenerator");
+	assert.notEqual(hasHex, hasGenerator, "fixture must define exactly one plaintext source");
+	if (hasHex) {
+		const plaintext = parseHex(input.plaintextHex, "input.plaintextHex");
+		return {
+			byteLength: plaintext.byteLength,
+			*chunks() {
+				if (plaintext.byteLength === 0) return;
+				for (let offset = 0; offset < plaintext.byteLength; offset += CHUNK_SIZE) {
+					yield plaintext.subarray(offset, Math.min(offset + CHUNK_SIZE, plaintext.byteLength));
+				}
+			},
+		};
+	}
+
+	const generator = input.plaintextGenerator;
+	assert.equal(typeof generator, "object", "input.plaintextGenerator must be an object");
+	assert.notEqual(generator, null, "input.plaintextGenerator must be an object");
+	assert.equal(generator.algorithm, "affine-byte-v1", "unsupported plaintext generator");
+	const byteLength = parseDecimalBytes(generator.length, "input.plaintextGenerator.length");
+	assert.equal(generator.multiplier, 131, "affine-byte-v1 multiplier must be 131");
+	assert.equal(generator.increment, 17, "affine-byte-v1 increment must be 17");
+	return {
+		byteLength,
+		*chunks() {
+			for (let offset = 0; offset < byteLength; offset += CHUNK_SIZE) {
+				const length = Math.min(CHUNK_SIZE, byteLength - offset);
+				const chunk = Buffer.allocUnsafe(length);
+				for (let index = 0; index < length; index += 1) {
+					chunk[index] = ((offset + index) * 131 + 17) & 0xff;
+				}
+				yield chunk;
+			}
+		},
+	};
+}
+
 function lp(value) {
 	assert.ok(value.byteLength <= 0xffff_fffe, "length-prefixed value is too large");
 	const length = Buffer.alloc(4);
@@ -59,8 +106,9 @@ function frameAad(header, fileAad, frameHeader) {
 	return Buffer.concat([FRAME_AAD_PREFIX, lp(header), lp(fileAad), lp(frameHeader)]);
 }
 
-export function buildDeterministicVector(input) {
-	const plaintext = parseHex(input.plaintextHex, "input.plaintextHex");
+export function buildDeterministicVector(input, options = {}) {
+	const source = plaintextSource(input);
+	const collectBytes = options.collectBytes ?? true;
 	const fileAad = parseHex(input.fileAadHex, "input.fileAadHex");
 	const dek = parseHex(input.dekHex, "input.dekHex");
 	const noncePrefix = parseHex(input.noncePrefixHex, "input.noncePrefixHex");
@@ -76,23 +124,42 @@ export function buildDeterministicVector(input) {
 	const wrappingContext = Buffer.concat([KEY_CONTEXT_PREFIX, lp(fileAad), lp(header)]);
 	const wrappedDek = encryptAesGcm(domainKey, wrapperNonce, dek, wrappingContext);
 	const wrappedKey = Buffer.concat([Buffer.of(1), wrapperNonce, wrappedDek]);
-	const frames = [header];
+	const frames = collectBytes ? [header] : undefined;
+	const ciphertextHash = createHash("sha256");
+	ciphertextHash.update(header);
+	const plaintextParts = collectBytes ? [] : undefined;
+	const dataFrames = [];
 	let dataFrameCount = 0;
-	for (let offset = 0; offset < plaintext.byteLength; offset += CHUNK_SIZE) {
-		const chunk = plaintext.subarray(offset, Math.min(offset + CHUNK_SIZE, plaintext.byteLength));
+	for (const chunk of source.chunks()) {
+		plaintextParts?.push(chunk);
 		const frameHeader = Buffer.alloc(DATA_HEADER_BYTES);
 		frameHeader[0] = 1;
 		frameHeader.writeUInt16BE(DATA_HEADER_BYTES, 2);
 		frameHeader.writeUInt32BE(dataFrameCount, 4);
 		frameHeader.writeUInt32BE(chunk.byteLength, 8);
-		frames.push(
-			frameHeader,
-			encryptAesGcm(
+		const encryptedBody = encryptAesGcm(
+			dek,
+			frameNonce(noncePrefix, dataFrameCount),
+			chunk,
+			frameAad(header, fileAad, frameHeader),
+		);
+		const frame = Buffer.concat([frameHeader, encryptedBody]);
+		frames?.push(frame);
+		ciphertextHash.update(frame);
+		dataFrames.push({
+			headerHex: frameHeader.toString("hex"),
+			ciphertextAndTagSha256: digest(encryptedBody).toString("hex"),
+		});
+		assert.deepEqual(
+			decryptAesGcm(
 				dek,
 				frameNonce(noncePrefix, dataFrameCount),
-				chunk,
+				encryptedBody.subarray(0, chunk.byteLength),
+				encryptedBody.subarray(chunk.byteLength),
 				frameAad(header, fileAad, frameHeader),
 			),
+			chunk,
+			"independent frame decrypt did not recover generated plaintext",
 		);
 		dataFrameCount += 1;
 	}
@@ -100,26 +167,40 @@ export function buildDeterministicVector(input) {
 	finalHeader[0] = 2;
 	finalHeader.writeUInt16BE(FINAL_HEADER_BYTES, 2);
 	finalHeader.writeUInt32BE(dataFrameCount, 4);
-	finalHeader.writeBigUInt64BE(BigInt(plaintext.byteLength), 8);
-	frames.push(
-		finalHeader,
-		encryptAesGcm(
-			dek,
-			frameNonce(noncePrefix, dataFrameCount),
-			Buffer.alloc(0),
-			frameAad(header, fileAad, finalHeader),
-		),
+	finalHeader.writeBigUInt64BE(BigInt(source.byteLength), 8);
+	const finalTag = encryptAesGcm(
+		dek,
+		frameNonce(noncePrefix, dataFrameCount),
+		Buffer.alloc(0),
+		frameAad(header, fileAad, finalHeader),
 	);
-	const nmf1 = Buffer.concat(frames);
+	const finalFrame = Buffer.concat([finalHeader, finalTag]);
+	frames?.push(finalFrame);
+	ciphertextHash.update(finalFrame);
+	decryptAesGcm(
+		dek,
+		frameNonce(noncePrefix, dataFrameCount),
+		Buffer.alloc(0),
+		finalTag,
+		frameAad(header, fileAad, finalHeader),
+	);
+	const nmf1 = frames === undefined ? undefined : Buffer.concat(frames);
+	const plaintext = plaintextParts === undefined ? undefined : Buffer.concat(plaintextParts);
+	const ciphertextBytes =
+		FILE_HEADER_BYTES + source.byteLength + dataFrameCount * (DATA_HEADER_BYTES + TAG_BYTES) + 32;
 	return {
 		plaintext,
+		plaintextBytes: source.byteLength,
 		fileAad,
 		header,
 		wrappingContext,
 		wrappedKey,
 		nmf1,
+		ciphertextBytes,
 		dataFrameCount,
-		ciphertextSha256: digest(nmf1).toString("hex"),
+		dataFrames,
+		finalFrame,
+		ciphertextSha256: ciphertextHash.digest("hex"),
 	};
 }
 
@@ -203,8 +284,9 @@ export function verifyNmf1Fixture(fixture) {
 	assert.equal(fixture.schemaVersion, 1, "unsupported fixture schema");
 	assert.equal(fixture.format, "NMF1", "fixture format must be NMF1");
 	assert.match(fixture.name, /^V\d{2}[a-z]?-[a-z0-9-]+$/, "fixture name is not canonical");
-	const built = buildDeterministicVector(fixture.input);
 	const expected = fixture.expected;
+	const hasCompleteObject = Object.hasOwn(expected, "nmf1Hex");
+	const built = buildDeterministicVector(fixture.input, { collectBytes: hasCompleteObject });
 	assert.equal(built.header.toString("hex"), expected.headerHex, "header bytes differ");
 	assert.equal(
 		built.wrappingContext.toString("hex"),
@@ -221,21 +303,28 @@ export function verifyNmf1Fixture(fixture) {
 	assert.equal(expected.detachedKeyReference, fixture.input.keyReference);
 	assert.equal(expected.wrappingAlgorithm, "A256GCMKW");
 	assert.equal(built.wrappedKey.toString("hex"), expected.wrappedKeyHex, "wrapped DEK differs");
-	assert.equal(built.nmf1.toString("hex"), expected.nmf1Hex, "NMF1 bytes differ");
-	assert.equal(String(built.plaintext.byteLength), expected.plaintextBytes);
-	assert.equal(String(built.nmf1.byteLength), expected.ciphertextBytes);
+	assert.equal(String(built.plaintextBytes), expected.plaintextBytes);
+	assert.equal(String(built.ciphertextBytes), expected.ciphertextBytes);
 	assert.equal(built.dataFrameCount, expected.dataFrameCount);
 	assert.equal(built.ciphertextSha256, expected.ciphertextSha256);
-	assert.deepEqual(
-		independentlyDecrypt(
-			parseHex(expected.nmf1Hex, "expected.nmf1Hex"),
-			built.fileAad,
-			parseHex(expected.wrappedKeyHex, "expected.wrappedKeyHex"),
-			parseHex(fixture.input.domainKeyHex, "input.domainKeyHex"),
-		),
-		built.plaintext,
-		"independent decrypt did not recover the fixture plaintext",
-	);
+	if (hasCompleteObject) {
+		assert.notEqual(built.nmf1, undefined);
+		assert.notEqual(built.plaintext, undefined);
+		assert.equal(built.nmf1.toString("hex"), expected.nmf1Hex, "NMF1 bytes differ");
+		assert.deepEqual(
+			independentlyDecrypt(
+				parseHex(expected.nmf1Hex, "expected.nmf1Hex"),
+				built.fileAad,
+				parseHex(expected.wrappedKeyHex, "expected.wrappedKeyHex"),
+				parseHex(fixture.input.domainKeyHex, "input.domainKeyHex"),
+			),
+			built.plaintext,
+			"independent decrypt did not recover the fixture plaintext",
+		);
+	} else {
+		assert.deepEqual(built.dataFrames, expected.dataFrames, "data-frame summaries differ");
+		assert.equal(built.finalFrame.toString("hex"), expected.finalFrameHex, "final frame differs");
+	}
 	return fixture.name;
 }
 

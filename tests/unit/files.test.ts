@@ -13,8 +13,10 @@ describe("NMF1 conformance vectors", () => {
 		});
 
 		expect(output).toBe(
-			"verified 6 NMF1 vectors: V01-empty, V02-one-byte, V03-mixed-binary, " +
-				"V08-null-workspace, V09a-owner-context-a, V09b-owner-context-b\n",
+			"verified 10 NMF1 vectors: V01-empty, V02-one-byte, V03-mixed-binary, " +
+				"V04-chunk-minus-one, V05-exact-chunk, V06-chunk-plus-one, " +
+				"V07-two-chunks-plus-seventeen, V08-null-workspace, V09a-owner-context-a, " +
+				"V09b-owner-context-b\n",
 		);
 	});
 });
