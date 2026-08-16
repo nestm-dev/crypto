@@ -6,7 +6,7 @@ import {
 	encodeCipherValue,
 	type CipherCodec,
 } from "./cipher-codec.js";
-import { aadBytes, frame, utf8, decodeUtf8 } from "./encoding.js";
+import { aadBytes, frame, isStableBytes, utf8, decodeUtf8 } from "./encoding.js";
 import {
 	encodeProtectedHeader,
 	envelopeInfo,
@@ -75,24 +75,6 @@ function validIdentifier(value: unknown, maxLength: number): value is string {
 		value.trim() === value &&
 		!/\p{Cc}/u.test(value)
 	);
-}
-
-function isStableBytes(value: unknown): value is Uint8Array {
-	try {
-		if (!(value instanceof Uint8Array) || !ArrayBuffer.isView(value)) return false;
-		const prototype = Object.getPrototypeOf(value) as object | null;
-		if (prototype !== Uint8Array.prototype && prototype !== Buffer.prototype) return false;
-		if (
-			Reflect.ownKeys(value).some(
-				(key) => typeof key !== "string" || !/^(?:0|[1-9]\d*)$/u.test(key),
-			)
-		) {
-			return false;
-		}
-		return !(value.buffer instanceof SharedArrayBuffer) && Number.isSafeInteger(value.byteLength);
-	} catch {
-		return false;
-	}
 }
 
 function captureAad(value: unknown, message: string): Uint8Array {

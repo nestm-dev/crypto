@@ -9,6 +9,15 @@ const MAX_WRAPPED_KEY_BYTES = 65_536;
 const MAX_NONCE_BYTES = 64;
 const MAX_TAG_BYTES = 64;
 
+/**
+ * Cheap shape test: does `value` look like a `nmc1` envelope? Framing only — nothing is
+ * parsed or authenticated. Use it to route legacy plaintext during a migration, never as
+ * a validity check.
+ */
+export function isCipherEnvelope(value: string): boolean {
+	return typeof value === "string" && value.startsWith(`${ENVELOPE_PREFIX}.`);
+}
+
 export interface ProtectedHeader {
 	readonly v: 1;
 	readonly cipher: string;
