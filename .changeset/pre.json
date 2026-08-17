@@ -7,6 +7,7 @@
   "changesets": [
     "azure-wrapping-context-fail-closed",
     "initial-crypto-release",
+    "quiet-wrappers-simplify",
     "recipient-addressed-seal",
     "secure-field-adapters",
     "stream-encrypted-files"
