@@ -600,10 +600,11 @@ describe("FileCipherEngine", () => {
 		expect(
 			new Set(
 				attempts.map((attempt) =>
-					Buffer.from(attempt.detachedKey.wrappedKey.subarray(1, 13)).toString("hex"),
+					Buffer.from(attempt.detachedKey.wrappedKey.subarray(1, 33)).toString("hex"),
 				),
 			).size,
 		).toBe(3);
+		for (const attempt of attempts) expect(attempt.detachedKey.wrappedKey).toHaveLength(81);
 		expect(
 			new Set(
 				attempts.map((attempt) => Buffer.from(attempt.detachedKey.wrappedKey).toString("hex")),
