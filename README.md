@@ -304,6 +304,13 @@ The `nmc1` format constrains registered ciphers to a 12-byte nonce so batch encr
 final four bytes for a collision-free operation counter. The cipher/provider contracts are extensible,
 but an algorithm needing a different nonce construction requires a future envelope version.
 
+`AesKeyRingProvider` derives a one-use AES-256-GCM wrapping key from the long-lived key, a fresh
+256-bit random salt, and domain-separated HKDF-SHA256 info bound to the key reference and wrapping
+context. The one-use key makes the format's fixed 96-bit GCM nonce safe without a durable invocation
+counter. New wrappers are 81 bytes (`version || salt || ciphertext || tag`), tagged version 2, and
+report `NESTM-A256GCM-HKDF-SHA256-SALT256-V2`; the 61-byte version 1 `A256GCMKW` wrappers written
+previously stay readable, so no stored key needs rewrapping.
+
 Wrapping-key rotation does not require immediately rewriting every value: keep old keys in the local
 ring as decrypt-only entries, or keep an old named provider in `allowedProviders`. Use `reencrypt()` to
 move one authenticated value to the current route, then retire old material only after verifying no

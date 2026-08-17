@@ -1,6 +1,7 @@
 export { Aes256GcmCipher, AES_256_GCM } from "./aes-256-gcm.js";
 export {
 	AesKeyRingProvider,
+	AES_GCM_HKDF_SHA256_KEY_WRAP,
 	AES_GCM_KEY_WRAP,
 	type AesKeyRingProviderOptions,
 } from "./aes-key-ring.provider.js";

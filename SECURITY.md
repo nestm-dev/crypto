@@ -42,6 +42,13 @@ backup/restore policy, and deciding which data must be encrypted.
   versioned as `nmc1.<protected>.<wrappedKey>.<iv>.<ciphertext>.<tag>`.
 - Wrapped data keys use a configured local AES key-encryption-key ring, RSA-OAEP-SHA256, AWS KMS,
   Google Cloud KMS, or Azure Key Vault/Managed HSM.
+- The local AES key ring derives a one-use AES-256-GCM wrapping key with HKDF-SHA256 from the
+  long-lived key and a fresh 256-bit salt. Domain-separated derivation info binds the version, key
+  reference, and a length-framed digest of the wrapping context. Each one-use key encrypts exactly
+  one 32-byte data key with a fixed 96-bit IV and a 128-bit tag. Salt collision probability replaces
+  the durable global counter previously required to prove direct GCM nonce uniqueness. Envelopes
+  written before this construction remain readable under their `A256GCMKW` algorithm name and
+  version byte.
 - Plaintext data keys are held as `KeyObject` values as early as practical. Temporary byte buffers are
   zeroed best-effort, but JavaScript runtimes cannot guarantee erasure of every copy.
 - No persistent plaintext data-key cache is part of the design.
