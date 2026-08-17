@@ -6,6 +6,7 @@
   },
   "changesets": [
     "azure-wrapping-context-fail-closed",
+    "fresh-only-key-wrappers",
     "initial-crypto-release",
     "quiet-wrappers-simplify",
     "recipient-addressed-seal",
