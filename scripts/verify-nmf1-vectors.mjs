@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { createCipheriv, createDecipheriv, createHash } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, hkdfSync } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -11,6 +11,20 @@ const FILE_HEADER_BYTES = 52;
 const DATA_HEADER_BYTES = 12;
 const FINAL_HEADER_BYTES = 16;
 const TAG_BYTES = 16;
+const WRAP_VERSION = 2;
+const WRAP_SALT_BYTES = 32;
+const WRAPPED_KEY_BYTES = 1 + WRAP_SALT_BYTES + 32 + TAG_BYTES;
+const WRAP_FIXED_IV = Buffer.alloc(12);
+const KEY_DERIVATION_INFO = Buffer.from(
+	"nestm:aes-key-ring:a256gcm-hkdf-sha256-salt256:v2\0",
+	"utf8",
+);
+const KEY_REFERENCE_CONTEXT = "nestm:aes-key-ring:key-reference:v2\0";
+const WRAPPING_CONTEXT = "nestm:aes-key-ring:wrapping-context:v2\0";
+const WRAP_AAD = Buffer.concat([
+	Buffer.from("nestm:aes-key-ring:wrapped-data-key:v2\0", "utf8"),
+	Buffer.of(WRAP_VERSION),
+]);
 const FILE_AAD_DIGEST_PREFIX = Buffer.from("nestm:nmf1:file-aad-digest:v1\0", "utf8");
 const FRAME_AAD_PREFIX = Buffer.from("nestm:nmf1:frame-aad:v1\0", "utf8");
 const KEY_CONTEXT_PREFIX = Buffer.from("nestm:nmf1:file-key-context:v1\0", "utf8");
@@ -82,6 +96,38 @@ function digest(...parts) {
 	return hash.digest();
 }
 
+function framedDigest(domain, value) {
+	const length = Buffer.alloc(8);
+	length.writeBigUInt64BE(BigInt(value.byteLength));
+	return digest(Buffer.from(domain, "utf8"), length, value);
+}
+
+function deriveWrappingKey(domainKey, salt, keyReference, wrappingContext) {
+	const info = Buffer.concat([
+		KEY_DERIVATION_INFO,
+		Buffer.of(WRAP_VERSION),
+		framedDigest(KEY_REFERENCE_CONTEXT, Buffer.from(keyReference, "utf8")),
+		framedDigest(WRAPPING_CONTEXT, wrappingContext),
+	]);
+	return Buffer.from(hkdfSync("sha256", domainKey, salt, info, 32));
+}
+
+function wrapDataKey(domainKey, salt, keyReference, wrappingContext, dataKey) {
+	const wrappingKey = deriveWrappingKey(domainKey, salt, keyReference, wrappingContext);
+	const ciphertextAndTag = encryptAesGcm(wrappingKey, WRAP_FIXED_IV, dataKey, WRAP_AAD);
+	return Buffer.concat([Buffer.of(WRAP_VERSION), salt, ciphertextAndTag]);
+}
+
+function unwrapDataKey(domainKey, keyReference, wrappingContext, wrappedKey) {
+	assert.equal(wrappedKey.byteLength, WRAPPED_KEY_BYTES, "detached wrapper must be 81 bytes");
+	assert.equal(wrappedKey[0], WRAP_VERSION, "detached wrapper version must be two");
+	const salt = wrappedKey.subarray(1, 1 + WRAP_SALT_BYTES);
+	const ciphertext = wrappedKey.subarray(1 + WRAP_SALT_BYTES, WRAPPED_KEY_BYTES - TAG_BYTES);
+	const tag = wrappedKey.subarray(WRAPPED_KEY_BYTES - TAG_BYTES);
+	const wrappingKey = deriveWrappingKey(domainKey, salt, keyReference, wrappingContext);
+	return decryptAesGcm(wrappingKey, WRAP_FIXED_IV, ciphertext, tag, WRAP_AAD);
+}
+
 function encryptAesGcm(key, nonce, plaintext, aad) {
 	const cipher = createCipheriv("aes-256-gcm", key, nonce, { authTagLength: TAG_BYTES });
 	cipher.setAAD(aad, { plaintextLength: plaintext.byteLength });
@@ -112,18 +158,17 @@ export function buildDeterministicVector(input, options = {}) {
 	const fileAad = parseHex(input.fileAadHex, "input.fileAadHex");
 	const dek = parseHex(input.dekHex, "input.dekHex");
 	const noncePrefix = parseHex(input.noncePrefixHex, "input.noncePrefixHex");
-	const wrapperNonce = parseHex(input.wrapperNonceHex, "input.wrapperNonceHex");
+	const wrapperSalt = parseHex(input.wrapperSaltHex, "input.wrapperSaltHex");
 	const domainKey = parseHex(input.domainKeyHex, "input.domainKeyHex");
 	assert.equal(dek.byteLength, 32, "fixture DEK must be 32 bytes");
 	assert.equal(noncePrefix.byteLength, 8, "fixture nonce prefix must be 8 bytes");
-	assert.equal(wrapperNonce.byteLength, 12, "fixture wrapper nonce must be 12 bytes");
+	assert.equal(wrapperSalt.byteLength, WRAP_SALT_BYTES, "fixture wrapper salt must be 32 bytes");
 	assert.equal(domainKey.byteLength, 32, "fixture domain key must be 32 bytes");
 
 	const contextDigest = digest(FILE_AAD_DIGEST_PREFIX, lp(fileAad));
 	const header = Buffer.concat([CONSTANT_FILE_HEADER, noncePrefix, contextDigest]);
 	const wrappingContext = Buffer.concat([KEY_CONTEXT_PREFIX, lp(fileAad), lp(header)]);
-	const wrappedDek = encryptAesGcm(domainKey, wrapperNonce, dek, wrappingContext);
-	const wrappedKey = Buffer.concat([Buffer.of(1), wrapperNonce, wrappedDek]);
+	const wrappedKey = wrapDataKey(domainKey, wrapperSalt, input.keyReference, wrappingContext, dek);
 	const frames = collectBytes ? [header] : undefined;
 	const ciphertextHash = createHash("sha256");
 	ciphertextHash.update(header);
@@ -204,22 +249,14 @@ export function buildDeterministicVector(input, options = {}) {
 	};
 }
 
-function independentlyDecrypt(nmf1, fileAad, wrappedKey, domainKey) {
+function independentlyDecrypt(nmf1, fileAad, wrappedKey, domainKey, keyReference) {
 	assert.ok(nmf1.byteLength >= FILE_HEADER_BYTES, "truncated NMF1 file header");
 	const header = nmf1.subarray(0, FILE_HEADER_BYTES);
 	assert.deepEqual(header.subarray(0, 12), CONSTANT_FILE_HEADER, "non-canonical NMF1 header");
 	const expectedContextDigest = digest(FILE_AAD_DIGEST_PREFIX, lp(fileAad));
 	assert.deepEqual(header.subarray(20), expectedContextDigest, "file AAD digest mismatch");
-	assert.equal(wrappedKey.byteLength, 61, "detached wrapper must be 61 bytes");
-	assert.equal(wrappedKey[0], 1, "detached wrapper version must be one");
 	const wrappingContext = Buffer.concat([KEY_CONTEXT_PREFIX, lp(fileAad), lp(header)]);
-	const dek = decryptAesGcm(
-		domainKey,
-		wrappedKey.subarray(1, 13),
-		wrappedKey.subarray(13, 45),
-		wrappedKey.subarray(45),
-		wrappingContext,
-	);
+	const dek = unwrapDataKey(domainKey, keyReference, wrappingContext, wrappedKey);
 	const noncePrefix = header.subarray(12, 20);
 	const plaintext = [];
 	let offset = FILE_HEADER_BYTES;
@@ -301,7 +338,7 @@ export function verifyNmf1Fixture(fixture) {
 	assert.equal(expected.detachedKeyVersion, 1);
 	assert.equal(expected.detachedKeyProvider, fixture.input.provider);
 	assert.equal(expected.detachedKeyReference, fixture.input.keyReference);
-	assert.equal(expected.wrappingAlgorithm, "A256GCMKW");
+	assert.equal(expected.wrappingAlgorithm, "NESTM-A256GCM-HKDF-SHA256-SALT256-V2");
 	assert.equal(built.wrappedKey.toString("hex"), expected.wrappedKeyHex, "wrapped DEK differs");
 	assert.equal(String(built.plaintextBytes), expected.plaintextBytes);
 	assert.equal(String(built.ciphertextBytes), expected.ciphertextBytes);
@@ -317,6 +354,7 @@ export function verifyNmf1Fixture(fixture) {
 				built.fileAad,
 				parseHex(expected.wrappedKeyHex, "expected.wrappedKeyHex"),
 				parseHex(fixture.input.domainKeyHex, "input.domainKeyHex"),
+				fixture.input.keyReference,
 			),
 			built.plaintext,
 			"independent decrypt did not recover the fixture plaintext",

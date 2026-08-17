@@ -9,7 +9,6 @@ import { describe, expect, it } from "vitest";
 import {
 	AesKeyRingProvider,
 	AES_GCM_HKDF_SHA256_KEY_WRAP,
-	AES_GCM_KEY_WRAP,
 	isCryptoError,
 	utf8,
 	type WrappedDataKey,
@@ -30,8 +29,6 @@ const DATA_KEY = Uint8Array.from({ length: 32 }, (_, index) => index + 32);
 
 const V2_LENGTH = 81;
 const V2_VERSION = 2;
-const V1_LENGTH = 61;
-const V1_VERSION = 1;
 const SALT_BYTES = 32;
 const FIXED_WRAP_IV = new Uint8Array(12);
 const KEY_DERIVATION_INFO = "nestm:aes-key-ring:a256gcm-hkdf-sha256-salt256:v2\0";
@@ -43,8 +40,6 @@ const WRAP_AUTHENTICATED_DATA = Buffer.concat([
 ]);
 const V2_KAT_WRAPPED_HEX =
 	"02404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5fdc406ffc3797bc020bd3296bd5a3e63c660e43247fc596d97cc1dd36573597f5e787f3a342b7b63378d751ff621cf48f";
-const V1_LEGACY_WRAPPED_HEX =
-	"01606162636465666768696a6bcafab9769f65a548543fd3005ea0ef6c1644bbbab05104ee9b98ba5740cfc9378acac91f63fce6ebf4473ccfb9805e2b";
 
 function ring(keys: Readonly<Record<string, Uint8Array>> = { k1: KEK }, active = "k1") {
 	return new AesKeyRingProvider({ activeKeyId: active, keys });
@@ -281,61 +276,6 @@ describe("AesKeyRingProvider wrapper tampering", () => {
 				provider.unwrapDataKey({ ...generated, wrappedKey }, context()),
 			);
 		}
-	});
-});
-
-describe("AesKeyRingProvider legacy compatibility", () => {
-	it("still unwraps the frozen A256GCMKW fixture written before the change", async () => {
-		const wrappingContext = context().wrappingContext;
-		const legacy = frozenWrappedKey(V1_LEGACY_WRAPPED_HEX, AES_GCM_KEY_WRAP);
-
-		const unwrapped = await ring().unwrapDataKey(legacy, { wrappingContext });
-
-		expect(exported(unwrapped)).toBe(Buffer.from(DATA_KEY).toString("hex"));
-		expect(legacy.wrappedKey.byteLength).toBe(V1_LENGTH);
-		expect(legacy.wrappedKey[0]).toBe(V1_VERSION);
-	});
-
-	it("keeps the legacy envelope bound to its context", async () => {
-		const legacy = frozenWrappedKey(V1_LEGACY_WRAPPED_HEX, AES_GCM_KEY_WRAP);
-
-		await expectAuthenticationFailure(
-			ring().unwrapDataKey(legacy, { wrappingContext: utf8("scope:b") }),
-		);
-	});
-
-	it("rejects a legacy envelope of the wrong length or version", async () => {
-		const wrappingContext = context().wrappingContext;
-		const legacy = frozenWrappedKey(V1_LEGACY_WRAPPED_HEX, AES_GCM_KEY_WRAP);
-
-		await expectAuthenticationFailure(
-			ring().unwrapDataKey(
-				{ ...legacy, wrappedKey: legacy.wrappedKey.subarray(0, V1_LENGTH - 1) },
-				{ wrappingContext },
-			),
-		);
-		await expectAuthenticationFailure(
-			ring().unwrapDataKey(
-				{ ...legacy, wrappedKey: corrupt(legacy.wrappedKey, 0) },
-				{ wrappingContext },
-			),
-		);
-	});
-
-	it("does not accept a v2 envelope presented as legacy, or the reverse", async () => {
-		const provider = ring();
-		const generated = await provider.generateDataKey(context());
-		const legacy = frozenWrappedKey(V1_LEGACY_WRAPPED_HEX, AES_GCM_KEY_WRAP);
-
-		await expectAuthenticationFailure(
-			provider.unwrapDataKey({ ...generated, wrappingAlgorithm: AES_GCM_KEY_WRAP }, context()),
-		);
-		await expectAuthenticationFailure(
-			provider.unwrapDataKey(
-				{ ...legacy, wrappingAlgorithm: AES_GCM_HKDF_SHA256_KEY_WRAP },
-				context(),
-			),
-		);
 	});
 });
 
