@@ -12,26 +12,22 @@ import {
 import { authenticationFailed, CryptoError, throwIfAborted } from "./errors.js";
 import type { DataKeyContext, DataKeyProvider, GeneratedDataKey, WrappedDataKey } from "./types.js";
 
-/** Salt-derived, one-use AES-256-GCM key wrapping used for new local key-ring writes. */
+/** Salt-derived, one-use AES-256-GCM key wrapping used by the local key ring. */
 export const AES_GCM_HKDF_SHA256_KEY_WRAP = "NESTM-A256GCM-HKDF-SHA256-SALT256-V2";
-/** @deprecated Read-only compatibility for envelopes written before AES_GCM_HKDF_SHA256_KEY_WRAP. */
-export const AES_GCM_KEY_WRAP = "A256GCMKW";
 
-const SALTED_WRAP_VERSION = 2;
+const WRAP_VERSION = 2;
 const SALT_BYTES = 32;
 const DATA_KEY_BYTES = 32;
 const TAG_BYTES = 16;
-const SALTED_WRAPPED_LENGTH = 1 + SALT_BYTES + DATA_KEY_BYTES + TAG_BYTES;
+const WRAPPED_KEY_BYTES = 1 + SALT_BYTES + DATA_KEY_BYTES + TAG_BYTES;
 const FIXED_WRAP_IV = new Uint8Array(12);
 const KEY_DERIVATION_INFO = "nestm:aes-key-ring:a256gcm-hkdf-sha256-salt256:v2\0";
 const KEY_REFERENCE_CONTEXT = "nestm:aes-key-ring:key-reference:v2\0";
 const WRAPPING_CONTEXT = "nestm:aes-key-ring:wrapping-context:v2\0";
 const WRAP_AUTHENTICATED_DATA = Buffer.concat([
 	Buffer.from("nestm:aes-key-ring:wrapped-data-key:v2\0", "utf8"),
-	Buffer.of(SALTED_WRAP_VERSION),
+	Buffer.of(WRAP_VERSION),
 ]);
-const LEGACY_WRAP_VERSION = 1;
-const LEGACY_WRAPPED_LENGTH = 1 + 12 + 32 + 16;
 
 export interface AesKeyRingProviderOptions {
 	readonly activeKeyId: string;
@@ -83,7 +79,7 @@ function deriveOneUseWrappingKey(
 	const contextDigest = framedDigest(WRAPPING_CONTEXT, wrappingContext);
 	const info = Buffer.concat([
 		Buffer.from(KEY_DERIVATION_INFO, "utf8"),
-		Buffer.of(SALTED_WRAP_VERSION),
+		Buffer.of(WRAP_VERSION),
 		referenceDigest,
 		contextDigest,
 	]);
@@ -151,27 +147,21 @@ export class AesKeyRingProvider implements DataKeyProvider {
 
 	async unwrapDataKey(dataKey: WrappedDataKey, context: DataKeyContext): Promise<KeyObject> {
 		throwIfAborted(context.signal);
-		if (
-			dataKey.wrappingAlgorithm !== AES_GCM_HKDF_SHA256_KEY_WRAP &&
-			dataKey.wrappingAlgorithm !== AES_GCM_KEY_WRAP
-		) {
+		if (dataKey.wrappingAlgorithm !== AES_GCM_HKDF_SHA256_KEY_WRAP) {
 			throw new CryptoError("INVALID_KEY", "The wrapped-key algorithm is unsupported.");
 		}
 		const kek = this.#keys.get(dataKey.keyReference);
 		if (!kek) throw new CryptoError("KEY_NOT_FOUND", "The wrapping key was not found.");
-		if (dataKey.wrappingAlgorithm === AES_GCM_HKDF_SHA256_KEY_WRAP) {
-			return this.#unwrapSalted(dataKey.wrappedKey, kek, dataKey.keyReference, context);
-		}
-		return this.#unwrapLegacy(dataKey.wrappedKey, kek, context);
+		return this.#unwrap(dataKey.wrappedKey, kek, dataKey.keyReference, context);
 	}
 
-	#unwrapSalted(
+	#unwrap(
 		wrappedKey: Uint8Array,
 		kek: KeyObject,
 		keyReference: string,
 		context: DataKeyContext,
 	): KeyObject {
-		if (wrappedKey.byteLength !== SALTED_WRAPPED_LENGTH || wrappedKey[0] !== SALTED_WRAP_VERSION) {
+		if (wrappedKey.byteLength !== WRAPPED_KEY_BYTES || wrappedKey[0] !== WRAP_VERSION) {
 			throw authenticationFailed();
 		}
 		const salt = wrappedKey.subarray(1, 1 + SALT_BYTES);
@@ -194,24 +184,6 @@ export class AesKeyRingProvider implements DataKeyProvider {
 		}
 	}
 
-	#unwrapLegacy(wrappedKey: Uint8Array, kek: KeyObject, context: DataKeyContext): KeyObject {
-		if (wrappedKey.byteLength !== LEGACY_WRAPPED_LENGTH || wrappedKey[0] !== LEGACY_WRAP_VERSION) {
-			throw authenticationFailed();
-		}
-		try {
-			const nonce = wrappedKey.subarray(1, 13);
-			const ciphertext = wrappedKey.subarray(13, 45);
-			const tag = wrappedKey.subarray(45);
-			const decipher = createDecipheriv("aes-256-gcm", kek, nonce, { authTagLength: 16 });
-			decipher.setAAD(context.wrappingContext, { plaintextLength: 32 });
-			decipher.setAuthTag(tag);
-			return decryptDataKey(decipher, ciphertext);
-		} catch (error: unknown) {
-			if (error instanceof CryptoError) throw error;
-			throw authenticationFailed({ cause: error });
-		}
-	}
-
 	#wrap(key: KeyObject, kek: KeyObject, keyReference: string, context: DataKeyContext): Uint8Array {
 		const salt = randomBytes(SALT_BYTES);
 		const raw = key.export();
@@ -229,8 +201,8 @@ export class AesKeyRingProvider implements DataKeyProvider {
 				throw new CryptoError("CIPHER_FAILURE", "Key wrapping produced an invalid result.");
 			}
 			tag = cipher.getAuthTag();
-			const output = new Uint8Array(SALTED_WRAPPED_LENGTH);
-			output[0] = SALTED_WRAP_VERSION;
+			const output = new Uint8Array(WRAPPED_KEY_BYTES);
+			output[0] = WRAP_VERSION;
 			output.set(salt, 1);
 			output.set(ciphertext, 1 + SALT_BYTES);
 			output.set(tag, 1 + SALT_BYTES + DATA_KEY_BYTES);

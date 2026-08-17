@@ -46,9 +46,9 @@ backup/restore policy, and deciding which data must be encrypted.
   long-lived key and a fresh 256-bit salt. Domain-separated derivation info binds the version, key
   reference, and a length-framed digest of the wrapping context. Each one-use key encrypts exactly
   one 32-byte data key with a fixed 96-bit IV and a 128-bit tag. Salt collision probability replaces
-  the durable global counter previously required to prove direct GCM nonce uniqueness. Envelopes
-  written before this construction remain readable under their `A256GCMKW` algorithm name and
-  version byte.
+  the durable global counter otherwise required to prove direct GCM nonce uniqueness. The local
+  wrapper accepts only the 81-byte version 2 format and its exact
+  `NESTM-A256GCM-HKDF-SHA256-SALT256-V2` algorithm identifier.
 - Plaintext data keys are held as `KeyObject` values as early as practical. Temporary byte buffers are
   zeroed best-effort, but JavaScript runtimes cannot guarantee erasure of every copy.
 - No persistent plaintext data-key cache is part of the design.

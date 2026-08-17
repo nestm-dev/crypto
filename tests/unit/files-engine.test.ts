@@ -51,7 +51,7 @@ interface Latch {
 const DEFAULT_AAD = Uint8Array.from([0x10, 0x20, 0x30]);
 const DEFAULT_NONCE_PREFIX = Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]);
 const DEFAULT_DEK = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
-const DEFAULT_WRAPPER = Uint8Array.from({ length: 61 }, (_, index) => (index * 7 + 3) & 0xff);
+const DEFAULT_WRAPPER = Uint8Array.from({ length: 81 }, (_, index) => (index * 7 + 3) & 0xff);
 
 function bytes(hex: string): Uint8Array {
 	return new Uint8Array(Buffer.from(hex, "hex"));
