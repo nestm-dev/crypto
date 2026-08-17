@@ -197,7 +197,7 @@
 		"@types/node": "24.13.3",
 		"@vitest/coverage-v8": "4.1.10",
 		"class-transformer": "0.5.1",
-		"oxlint": "1.77.0",
+		"oxlint": "1.78.0",
 		"oxlint-tsgolint": "7.0.2001",
 		"prettier": "3.9.6",
 		"publint": "0.3.23",
