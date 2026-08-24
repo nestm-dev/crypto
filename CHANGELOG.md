@@ -1,5 +1,14 @@
 # @nestm/crypto
 
+## 0.1.0-alpha.7
+
+### Minor Changes
+
+- 8256dee: Remove the storage-specific `@nestm/crypto/storage-workspace` integration and
+  its optional `@nestm/storage` peer. Applications now compose storage policy,
+  artifact record formats, authenticated path context, and searchable projections
+  from the generic primitives exposed by `@nestm/crypto/core`.
+
 ## 0.1.0-alpha.6
 
 ### Minor Changes
