@@ -50,6 +50,11 @@
 			"import": "./dist/files/index.mjs",
 			"default": "./dist/files/index.mjs"
 		},
+		"./storage-workspace": {
+			"types": "./dist/storage-workspace/index.d.mts",
+			"import": "./dist/storage-workspace/index.mjs",
+			"default": "./dist/storage-workspace/index.mjs"
+		},
 		"./fields": {
 			"types": "./dist/fields/index.d.mts",
 			"import": "./dist/fields/index.mjs",
@@ -144,6 +149,7 @@
 		"@azure/core-auth": ">=1.11.0 <2",
 		"@azure/keyvault-keys": ">=4.10.2 <5",
 		"@google-cloud/kms": ">=5.7.0 <6",
+		"@nestm/storage": ">=0.1.0-alpha.9 <0.2.0",
 		"@nestm/tenant": ">=0.1.0-alpha.3 <0.2.0",
 		"@nestjs/common": "^12.0.0-alpha.5",
 		"@nestjs/core": "^12.0.0-alpha.5",
@@ -162,6 +168,9 @@
 			"optional": true
 		},
 		"@google-cloud/kms": {
+			"optional": true
+		},
+		"@nestm/storage": {
 			"optional": true
 		},
 		"@nestm/tenant": {
@@ -190,6 +199,7 @@
 		"@azure/keyvault-keys": "4.10.2",
 		"@changesets/cli": "2.31.1",
 		"@google-cloud/kms": "5.7.0",
+		"@nestm/storage": "0.1.0-alpha.9",
 		"@nestm/tenant": "0.1.0-alpha.5",
 		"@nestjs/common": "12.0.0-alpha.5",
 		"@nestjs/core": "12.0.0-alpha.5",
