@@ -2,8 +2,7 @@
 
 Authenticated, versioned encryption for Node.js and NestJS 12. The package provides an
 AES-256-GCM core, envelope key providers, explicit field traversal, cloud KMS adapters, a
-fail-closed bridge to `@nestm/tenant`, an optional protected-workspace bridge to `@nestm/storage`,
-and opt-in HTTP and Prisma field adapters.
+fail-closed bridge to `@nestm/tenant`, and opt-in HTTP and Prisma field adapters.
 
 > This package is an alpha. Pin an exact version, retain every key needed by stored ciphertext, and
 > test rotation and recovery before using it for production data.
@@ -25,9 +24,6 @@ pnpm add @nestjs/common@next @nestjs/core@next reflect-metadata rxjs
 # Optional tenant bridge
 pnpm add @nestm/tenant
 
-# Optional protected StorageWorkspace bridge (pin prerelease integrations exactly)
-pnpm add @nestm/storage@0.1.0-alpha.9
-
 # Optional HTTP DTO adapter
 pnpm add class-transformer class-validator
 
@@ -37,7 +33,7 @@ pnpm add @google-cloud/kms
 pnpm add @azure/core-auth @azure/keyvault-keys
 ```
 
-Cloud SDKs, NestJS, `@nestm/storage`, `@nestm/tenant`, and `class-transformer` are optional peers.
+Cloud SDKs, NestJS, `@nestm/tenant`, and `class-transformer` are optional peers.
 `class-validator` is application-owned and needed only when the app uses Nest's `ValidationPipe`
 validation. The Prisma adapter is schema-agnostic and uses the consuming application's Prisma client,
 so it adds no Prisma dependency. A consumer that imports only `@nestm/crypto/core` installs none of
@@ -182,101 +178,6 @@ Completion/verification also authenticates the mandatory final frame and physica
 An authenticated full frame may be emitted before a later frame or EOF fails. A download may stream
 that authenticated prefix and abort on failure, but agents, previews, archive/skill validation, and
 other side-effecting consumers must stage all plaintext until `verification` resolves.
-
-## Protected storage workspaces
-
-`@nestm/crypto/storage-workspace` composes an already-authorized `StorageWorkspace` from
-`@nestm/storage/workspace` with an application-supplied authenticated cipher. The adapter imports
-both libraries only from this optional subpath: `@nestm/crypto/core` and the root entry point remain
-independent of storage, while `@nestm/storage` remains independent of key providers and crypto
-policy.
-
-The built-in `createCipherEngineWorkspaceCipher()` adapter uses `CipherEngine` and the bounded
-`nmc1` format. It strictly encrypts the logical metadata record and body independently, and it rejects
-plaintext, malformed records, wrong scope/policy/path context, and unauthenticated envelopes on read.
-The backing workspace stores one versioned outer JSON record whose `metadata` and `content` members
-are `nmc1` envelopes; it never receives the original body or logical content type.
-
-```ts
-import type { StorageWorkspace } from "@nestm/storage/workspace";
-import type { CipherEngine } from "@nestm/crypto/core";
-import {
-	createCipherEngineWorkspaceCipher,
-	protectStorageWorkspace,
-} from "@nestm/crypto/storage-workspace";
-
-declare const mountedWorkspace: StorageWorkspace;
-declare const engine: CipherEngine;
-declare const canonicalOrganizationId: string;
-declare const canonicalWorkspaceId: string;
-
-const logicalLimits = {
-	...mountedWorkspace.limits,
-	maxReadBytes: 1024 * 1024,
-	maxWriteBytes: 1024 * 1024,
-};
-const protectedWorkspace = protectStorageWorkspace({
-	storage: mountedWorkspace,
-	cipher: createCipherEngineWorkspaceCipher(engine, {
-		allowedProviders: ["workspace-current", "workspace-previous"],
-	}),
-	scopeContext: `organization:${canonicalOrganizationId}/workspace:${canonicalWorkspaceId}`,
-	policyRevision: "artifact-body:v1",
-	limits: logicalLimits,
-	// This is a separate ceiling for the expanded outer record held by the backing workspace.
-	maxCiphertextBytes: 2 * 1024 * 1024,
-	// Explicitly accepts that the backing provider can search visible object paths.
-	pathSearch: "provider-visible",
-});
-
-await protectedWorkspace.writeFile("reports/result.md", "# Verified\n", {
-	mode: "create",
-	contentType: "text/markdown; charset=utf-8",
-});
-const restored = await protectedWorkspace.readText("reports/result.md");
-```
-
-On the initial protected view, the path, page, search, cursor, and cursor-TTL limits must match the
-already-mounted backing workspace because that capability owns their enforcement. Logical
-`maxReadBytes` and `maxWriteBytes` may be lower. A derived `mount()` creates a correspondingly narrowed
-backing capability, so every child limit can be reduced safely. Configure `CipherEngine.maxPayloadBytes`
-to cover the larger logical read/write ceiling and size `maxCiphertextBytes` for `nmc1` plus outer-record
-expansion; a plaintext value within its logical limit can still exceed an undersized physical ceiling.
-
-`scopeContext` and `policyRevision` are authenticated domain inputs. Derive the scope from trusted,
-canonical application context and keep both values reproducible for the lifetime of stored objects.
-Do not change `policyRevision` merely because the active wrapping key rotates; use an explicit
-read/migrate policy when changing the authenticated policy domain. The cipher adapter does not take
-ownership of `CipherEngine`, so the application that created the engine must close it.
-
-`AuthenticatedWorkspaceCipher` is a trusted composition contract for alternative implementations.
-Implementations must remain bounded, authenticate both supplied contexts, honor cancellation, and not
-retain borrowed plaintext or context buffers after a call settles. The built-in adapter supplies those
-properties through `CipherEngine`; registered cipher algorithms and key providers remain part of the
-application's crypto trust boundary.
-
-The canonical logical path and record purpose are also bound automatically, so copying a raw backing
-record to another path does not produce valid plaintext there. Protected `copyFile()` and `moveFile()`
-therefore fail with `NOT_SUPPORTED`. An authorized application workflow must read/authenticate the
-source and write a newly encrypted destination; a move may then conditionally delete the source, with
-the same multi-object transactional caveats as any application-managed move.
-
-The bridge deliberately does not hide all storage metadata. Object paths, directory shape, existence,
-ciphertext length, provider ETag/timestamps, and access patterns remain visible to the backing store.
-Path search is disabled unless `pathSearch: "provider-visible"` explicitly accepts that leakage.
-Applications such as artifact catalogs should keep only deliberately searchable fields—safe IDs,
-titles, descriptions, status, and other chosen projections—in their own authorized catalog and store
-the sensitive artifact body through this protected workspace. The bridge does not encrypt arbitrary
-database columns or decide which catalog fields are safe.
-
-Protected list, stat, and enabled search operations authenticate file metadata before returning it.
-Synthetic directories, provider-level existence, cursors, and access patterns remain storage signals,
-and the file body is authenticated only by a protected read.
-
-`protectedWorkspace.protection` exposes a frozen, non-secret integration descriptor containing the
-outer format/version, `nmc1` envelope, path binding, metadata/body protection, path-search mode, and
-policy revision. It describes the configured boundary; it does not reveal provider keys, storage
-coordinates, plaintext, or ciphertext.
 
 ## Operations
 
@@ -750,20 +651,19 @@ plaintext with `@nestm/crypto`; relabeling or importing the old ciphertext is no
 
 ## Entry points
 
-| Entry point                       | Purpose                                                                       |
-| --------------------------------- | ----------------------------------------------------------------------------- |
-| `@nestm/crypto/core`              | AES-256-GCM engine, envelope codec, local AES KEK ring, contracts, and errors |
-| `@nestm/crypto/files`             | NMF1 bounded-memory streaming file encryption with detached wrapped keys      |
-| `@nestm/crypto/storage-workspace` | strict authenticated body/metadata protection for `StorageWorkspace`          |
-| `@nestm/crypto/fields`            | purpose-decorated class traversal                                             |
-| `@nestm/crypto/tenant`            | tenant-bound cipher and field services                                        |
-| `@nestm/crypto/http`              | request-encryption pipe and opt-in response-decryption interceptor            |
-| `@nestm/crypto/prisma`            | schema-agnostic tenant Prisma write processor                                 |
-| `@nestm/crypto/key-wrap/rsa`      | RSA-OAEP-SHA256 wrapping with named public/private keys                       |
-| `@nestm/crypto/kms/aws`           | AWS KMS data-key generation and decrypt                                       |
-| `@nestm/crypto/kms/gcp`           | Google Cloud KMS encrypt/decrypt with AAD and CRC32C validation               |
-| `@nestm/crypto/kms/azure`         | Azure Key Vault/Managed HSM wrap/unwrap                                       |
-| `@nestm/crypto/testing`           | dependency-free deterministic nonce source for tests                          |
+| Entry point                  | Purpose                                                                       |
+| ---------------------------- | ----------------------------------------------------------------------------- |
+| `@nestm/crypto/core`         | AES-256-GCM engine, envelope codec, local AES KEK ring, contracts, and errors |
+| `@nestm/crypto/files`        | NMF1 bounded-memory streaming file encryption with detached wrapped keys      |
+| `@nestm/crypto/fields`       | purpose-decorated class traversal                                             |
+| `@nestm/crypto/tenant`       | tenant-bound cipher and field services                                        |
+| `@nestm/crypto/http`         | request-encryption pipe and opt-in response-decryption interceptor            |
+| `@nestm/crypto/prisma`       | schema-agnostic tenant Prisma write processor                                 |
+| `@nestm/crypto/key-wrap/rsa` | RSA-OAEP-SHA256 wrapping with named public/private keys                       |
+| `@nestm/crypto/kms/aws`      | AWS KMS data-key generation and decrypt                                       |
+| `@nestm/crypto/kms/gcp`      | Google Cloud KMS encrypt/decrypt with AAD and CRC32C validation               |
+| `@nestm/crypto/kms/azure`    | Azure Key Vault/Managed HSM wrap/unwrap                                       |
+| `@nestm/crypto/testing`      | dependency-free deterministic nonce source for tests                          |
 
 Adapters accept caller-owned SDK clients as well as configuration-created clients. Caller-owned clients
 are never closed; owned clients are closed or released where the SDK exposes that lifecycle. Each cloud

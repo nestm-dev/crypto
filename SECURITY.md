@@ -78,53 +78,6 @@ Local AES and RSA providers shift key custody into the application. Load their s
 secret source, keep active wrapping keys separate from legacy decrypt-only keys, and retain old keys
 until all dependent ciphertext has been re-encrypted and verified.
 
-## Protected-storage-workspace boundary
-
-`@nestm/crypto/storage-workspace` is an optional composition layer over an already-mounted,
-application-authorized `StorageWorkspace`. It does not select a provider, bucket, filesystem root,
-tenant, mount prefix, or key route. The application remains responsible for constructing the storage
-capability and authenticated cipher independently and for deriving `scopeContext` and
-`policyRevision` from stable, trusted policy state.
-
-The bridge stores one strict, versioned outer JSON record. Logical metadata and file content are
-separate `nmc1` envelopes with distinct authenticated purposes. Their AAD binds the workspace scope,
-policy revision, canonical relative path, record version, and purpose. Plaintext records, unknown
-members or versions, malformed envelopes, swapped metadata/content envelopes, and a raw record copied
-to another path fail closed during protected reads. Protected copy and move are intentionally denied.
-An authorized application must read/authenticate the source, write/re-encrypt the destination, and—if
-moving—conditionally delete the source while accounting for the lack of a cross-object transaction.
-Raw backing-store mutations bypass the bridge and can cause an availability failure.
-
-This boundary encrypts the logical body and its protected metadata record, not every storage signal.
-The backing store still observes physical keys, directory shape, object existence, ciphertext sizes,
-provider ETags/timestamps, operation timing, and access patterns. Provider-visible path search is an
-explicit opt-in; keep it disabled when path disclosure or equality is unacceptable. Applications that
-need searchable titles, descriptions, statuses, or other projections should maintain a separate,
-authorized catalog and choose those plaintext fields deliberately. This package neither encrypts
-arbitrary catalog/database fields nor decides which projections are safe to expose.
-
-File metadata returned by protected list, stat, and search operations is authenticated. Synthetic
-directories, provider-level existence, and continuation behavior still describe backing-store state,
-and none of those operations proves that a body authenticates; body authentication occurs on protected
-read. The read-only protection descriptor reports the configured bridge contract but is not a
-remote-attestation mechanism and must not be used as authorization evidence.
-
-The `CipherEngine` workspace adapter is buffered. Configure independent logical plaintext and outer
-ciphertext ceilings, ensure the backing workspace can hold the expanded record, and propagate abort
-signals and deadlines. Use NMF1 `@nestm/crypto/files` behind a purpose-built integration when immutable
-multi-gigabyte streaming objects are required; do not weaken the bounded `nmc1` bridge with an
-application-side plaintext fallback. As with the core envelope, deletion and same-path rollback to an
-older valid record are not prevented; applications needing freshness must enforce it in an
-authenticated catalog or version policy.
-
-At initial composition, non-buffer limits must match the already-mounted backing workspace; only the
-logical read/write limits may be lower. Derived mounts create narrowed backing capabilities and may
-reduce every limit. The injected `AuthenticatedWorkspaceCipher` is trusted to enforce its own bounds,
-honor the operation signal, and stop using borrowed buffers when its promise settles. Prefer the built-in
-`CipherEngine` adapter unless an alternative has equivalent conformance coverage. Short invalid paths
-are byte-bounded before crypto but receive their complete canonical path validation from the backing
-workspace, so a rejected create/overwrite may perform cryptographic work without persisting an object.
-
 ## Tenant boundary
 
 `@nestm/crypto/tenant` derives the canonical tenant only from `TENANT_CONTEXT_READER`. Its ordinary

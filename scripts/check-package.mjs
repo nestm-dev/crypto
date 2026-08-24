@@ -8,7 +8,6 @@ const expectedExports = [
 	".",
 	"./core",
 	"./files",
-	"./storage-workspace",
 	"./fields",
 	"./tenant",
 	"./http",
@@ -46,7 +45,6 @@ if (files.some((file) => file.endsWith(".map"))) {
 const optionalPeers = [
 	"@nestjs/common",
 	"@nestjs/core",
-	"@nestm/storage",
 	"@nestm/tenant",
 	"@aws-sdk/client-kms",
 	"@google-cloud/kms",
@@ -62,31 +60,12 @@ for (const peer of optionalPeers) {
 		throw new Error(`Integration peer must remain optional: ${peer}`);
 	}
 }
-if (manifest.devDependencies?.["@nestm/storage"] !== "0.1.0-alpha.9") {
-	throw new Error("The storage bridge must test against exactly @nestm/storage@0.1.0-alpha.9");
-}
 const coreSource = readFileSync(join(root, "dist/core/index.mjs"), "utf8");
 for (const peer of optionalPeers) {
 	if (coreSource.includes(peer)) {
 		throw new Error(`The framework-neutral core unexpectedly imports optional peer ${peer}`);
 	}
 }
-const rootSource = readFileSync(join(root, "dist/index.mjs"), "utf8");
-if (rootSource.includes("@nestm/storage")) {
-	throw new Error("The root entry point unexpectedly imports optional peer @nestm/storage");
-}
-for (const bridgeArtifact of [
-	"dist/storage-workspace/index.mjs",
-	"dist/storage-workspace/index.d.mts",
-]) {
-	const source = readFileSync(join(root, bridgeArtifact), "utf8");
-	if (/from\s+["']@nestm\/storage["']/u.test(source)) {
-		throw new Error(
-			`The storage bridge must use framework-neutral @nestm/storage subpaths: ${bridgeArtifact}`,
-		);
-	}
-}
-
 const core = await import(pathToFileURL(join(root, "dist/core/index.mjs")).href);
 if (Object.keys(core).length === 0) throw new Error("The core entry point exports no values");
 

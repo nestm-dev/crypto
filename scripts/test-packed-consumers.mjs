@@ -23,7 +23,6 @@ try {
 	const tarball = join(packageDirectory, tarballName);
 
 	testCoreConsumer(tarball);
-	testStorageWorkspaceConsumer(tarball);
 	testIntegrationConsumer(tarball);
 	verifyTarball(tarball);
 } finally {
@@ -109,129 +108,6 @@ await engine.close();
 			throw new Error(`Core-only consumer unexpectedly installed ${absent}`);
 		}
 	}
-}
-
-function testStorageWorkspaceConsumer(tarball) {
-	const directory = join(temporaryRoot, "storage-workspace-consumer");
-	mkdirSync(directory);
-	writeJson(join(directory, "package.json"), {
-		name: "@nestm/crypto-storage-workspace-consumer",
-		private: true,
-		type: "module",
-	});
-	run(
-		"npm",
-		[
-			"install",
-			"--ignore-scripts",
-			"--no-audit",
-			"--no-fund",
-			"--legacy-peer-deps",
-			tarball,
-			"@nestm/storage@0.1.0-alpha.9",
-			"typescript@7.0.2",
-			"@types/node@24.13.3",
-		],
-		directory,
-	);
-	writeFileSync(
-		join(directory, "consumer.ts"),
-		`import assert from "node:assert/strict";
-import { generateKeySync } from "node:crypto";
-import { StorageClient } from "@nestm/storage/core";
-import { createMemoryStorageDriver } from "@nestm/storage/testing";
-import { mountStorageWorkspace } from "@nestm/storage/workspace";
-import { AesKeyRingProvider, CipherEngine } from "@nestm/crypto/core";
-import {
-  createCipherEngineWorkspaceCipher,
-  protectStorageWorkspace,
-} from "@nestm/crypto/storage-workspace";
-
-const client = new StorageClient("packed-protected-memory", createMemoryStorageDriver());
-const rawWorkspace = mountStorageWorkspace(client, {
-  prefix: "validation-only/protected",
-  permissions: ["list", "read", "search", "write", "create", "replace", "copy", "move", "delete"],
-  limits: {
-    maxReadBytes: 64 * 1024,
-    maxWriteBytes: 64 * 1024,
-    maxPageSize: 20,
-    maxSearchResults: 20,
-    maxSearchScan: 100,
-  },
-});
-const engine = new CipherEngine({
-  defaultProvider: "packed-storage",
-  providers: [{
-    name: "packed-storage",
-    provider: new AesKeyRingProvider({
-      activeKeyId: "packed-storage-key",
-      keys: { "packed-storage-key": generateKeySync("aes", { length: 256 }) },
-    }),
-  }],
-  maxPayloadBytes: 64 * 1024,
-});
-const cipher = createCipherEngineWorkspaceCipher(engine, {
-  allowedProviders: ["packed-storage"],
-});
-const logicalLimits = {
-  ...rawWorkspace.limits,
-  maxReadBytes: 8 * 1024,
-  maxWriteBytes: 8 * 1024,
-};
-const workspace = protectStorageWorkspace({
-  storage: rawWorkspace,
-  cipher,
-  scopeContext: "organization:packed/workspace:protected",
-  policyRevision: "packed-v1",
-  limits: logicalLimits,
-  maxCiphertextBytes: 64 * 1024,
-  pathSearch: "provider-visible",
-});
-
-assert.equal(workspace.protection.outerFormat, "nestm-protected-storage-workspace");
-assert.equal(workspace.protection.outerVersion, 1);
-assert.equal(workspace.protection.body, "encrypted");
-assert.equal(workspace.protection.metadata, "encrypted");
-assert.equal(workspace.protection.pathSearch, "provider-visible");
-assert.equal(workspace.protection.policyRevision, "packed-v1");
-
-const plaintext = "packed protected workspace secret";
-await workspace.writeFile("reports/result.txt", plaintext, {
-  // The Files SDK memory adapter deliberately lacks atomic create-if-absent.
-  mode: "overwrite",
-  contentType: "text/plain; charset=utf-8",
-});
-const raw = await rawWorkspace.readText("reports/result.txt");
-assert.equal(raw.text.includes(plaintext), false);
-const backingRecord: unknown = JSON.parse(raw.text);
-assert.ok(typeof backingRecord === "object" && backingRecord !== null);
-const record = backingRecord as Record<string, unknown>;
-assert.deepEqual(Object.keys(record), ["v", "record", "version", "metadata", "content"]);
-assert.equal(record.v, 1);
-const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
-assert.match(String(record.record), uuidV4);
-assert.match(String(record.version), uuidV4);
-assert.match(String(record.metadata), /^nmc1\\./u);
-assert.match(String(record.content), /^nmc1\\./u);
-for (const envelope of [String(record.metadata), String(record.content)]) {
-  for (const segment of envelope.split(".").slice(1)) {
-    assert.equal(Buffer.from(segment, "base64url").includes(Buffer.from(plaintext)), false);
-  }
-}
-
-const restored = await workspace.readText("reports/result.txt");
-assert.equal(restored.text, plaintext);
-assert.equal(restored.contentType, "text/plain; charset=utf-8");
-const page = await workspace.list({ directory: "reports" });
-assert.equal(page.entries[0]?.path, "reports/result.txt");
-
-await engine.close();
-await client.onApplicationShutdown();
-`,
-	);
-	writeTypeScriptConfig(directory);
-	run(join(directory, "node_modules/.bin/tsc"), ["-p", "tsconfig.json"], directory);
-	run(process.execPath, ["dist/consumer.js"], directory);
 }
 
 function testIntegrationConsumer(tarball) {
