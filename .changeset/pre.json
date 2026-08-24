@@ -8,6 +8,7 @@
     "azure-wrapping-context-fail-closed",
     "fresh-only-key-wrappers",
     "initial-crypto-release",
+    "protected-storage-workspaces",
     "quiet-wrappers-simplify",
     "recipient-addressed-seal",
     "secure-field-adapters",
