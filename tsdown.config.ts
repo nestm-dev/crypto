@@ -5,6 +5,7 @@ export default defineConfig({
 		"src/index.ts",
 		"src/core/index.ts",
 		"src/files/index.ts",
+		"src/storage-workspace/index.ts",
 		"src/fields/index.ts",
 		"src/tenant/index.ts",
 		"src/http/index.ts",
@@ -27,6 +28,7 @@ export default defineConfig({
 	deps: {
 		neverBundle: [
 			/^@nestjs\//,
+			/^@nestm\/storage(?:\/|$)/,
 			/^@nestm\/tenant(?:\/|$)/,
 			/^@aws-sdk\/client-kms(?:\/|$)/,
 			/^@google-cloud\/kms(?:\/|$)/,
