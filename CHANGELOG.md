@@ -1,5 +1,16 @@
 # @nestm/crypto
 
+## 0.1.0-alpha.6
+
+### Minor Changes
+
+- 1279ac3: Add the optional `@nestm/crypto/storage-workspace` bridge for composing a
+  capability-scoped `@nestm/storage` workspace with strict, authenticated body
+  encryption. The bridge keeps storage and crypto policies application-owned,
+  binds ciphertext to stable workspace scope and canonical path context, exposes
+  only a non-secret protection descriptor, and leaves the framework-neutral
+  crypto core independent of storage.
+
 ## 0.1.0-alpha.5
 
 ### Minor Changes
