@@ -31,7 +31,7 @@
 	"engines": {
 		"node": ">=22.13.0"
 	},
-	"packageManager": "pnpm@11.20.0",
+	"packageManager": "pnpm@11.24.0",
 	"main": "./dist/index.mjs",
 	"types": "./dist/index.d.mts",
 	"exports": {
@@ -143,10 +143,10 @@
 		"@aws-sdk/client-kms": ">=3.700.0 <4",
 		"@azure/core-auth": ">=1.11.0 <2",
 		"@azure/keyvault-keys": ">=4.10.2 <5",
-		"@google-cloud/kms": ">=5.7.0 <6",
+		"@google-cloud/kms": ">=5.7.0 <7",
 		"@nestm/tenant": ">=0.1.0-alpha.3 <0.2.0",
-		"@nestjs/common": "^12.0.0-alpha.5",
-		"@nestjs/core": "^12.0.0-alpha.5",
+		"@nestjs/common": "^12.0.0",
+		"@nestjs/core": "^12.0.0",
 		"class-transformer": ">=0.5.1 <1",
 		"reflect-metadata": "^0.2.2",
 		"rxjs": "^7.8.0"
@@ -185,26 +185,26 @@
 	},
 	"devDependencies": {
 		"@arethetypeswrong/cli": "0.18.5",
-		"@aws-sdk/client-kms": "3.1106.0",
+		"@aws-sdk/client-kms": "3.1120.0",
 		"@azure/core-auth": "1.11.0",
 		"@azure/keyvault-keys": "4.10.2",
-		"@changesets/cli": "2.31.1",
-		"@google-cloud/kms": "5.7.0",
-		"@nestm/tenant": "0.1.0-alpha.5",
-		"@nestjs/common": "12.0.0-alpha.5",
-		"@nestjs/core": "12.0.0-alpha.5",
-		"@nestjs/testing": "12.0.0-alpha.5",
-		"@types/node": "24.13.3",
-		"@vitest/coverage-v8": "4.1.10",
+		"@changesets/cli": "3.0.1",
+		"@google-cloud/kms": "6.0.0",
+		"@nestm/tenant": "0.1.0-alpha.8",
+		"@nestjs/common": "12.0.1",
+		"@nestjs/core": "12.0.1",
+		"@nestjs/testing": "12.0.1",
+		"@types/node": "26.4.0",
+		"@vitest/coverage-v8": "4.1.11",
 		"class-transformer": "0.5.1",
-		"oxlint": "1.77.0",
+		"oxlint": "1.80.0",
 		"oxlint-tsgolint": "7.0.2001",
 		"prettier": "3.9.6",
-		"publint": "0.3.23",
+		"publint": "0.3.24",
 		"reflect-metadata": "0.2.2",
 		"rxjs": "7.8.2",
 		"tsdown": "0.22.14",
 		"typescript": "7.0.2",
-		"vitest": "4.1.10"
+		"vitest": "4.1.11"
 	}
 }
