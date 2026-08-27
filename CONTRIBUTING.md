@@ -16,7 +16,7 @@ NodeNext resolution. Nest providers use legacy decorator metadata because that i
 ### Tenant development dependency
 
 The development dependency is pinned to the first tenant release containing the context-reader
-contract, `@nestm/tenant@0.1.0-alpha.3`. Keep it registry-resolvable so standalone CI and release jobs
+contract, `@nestm/tenant@0.1.0-alpha.7`. Keep it registry-resolvable so standalone CI and release jobs
 do not depend on a sibling checkout. The public peer range remains `>=0.1.0-alpha.3 <0.2.0`.
 
 The packed-consumer test may use a sibling tenant checkout during coordinated local development. Set

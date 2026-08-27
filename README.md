@@ -19,7 +19,7 @@ Install only the integrations the application uses:
 pnpm add @nestm/crypto
 
 # Nest integration
-pnpm add @nestjs/common@next @nestjs/core@next reflect-metadata rxjs
+pnpm add @nestjs/common@^12.0.0 @nestjs/core@^12.0.0 reflect-metadata rxjs
 
 # Optional tenant bridge
 pnpm add @nestm/tenant

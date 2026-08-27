@@ -31,13 +31,14 @@ jobs:
       - run: pnpm run verify
       - name: Create release PR or publish
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@8488615a623b1b9c987934bb89eae8af6a946ac1 # v2.1.1
         with:
-          publish: pnpm run release
-          version: pnpm run version-packages
-          title: "chore: release @nestm/crypto"
-          commit: "chore: release @nestm/crypto"
-          createGithubReleases: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          publish-script: pnpm run release
+          version-script: pnpm run version-packages
+          pr-title: "chore: release @nestm/crypto"
+          commit-message: "chore: release @nestm/crypto"
+          create-github-releases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Reconcile git tag with npm

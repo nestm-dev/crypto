@@ -1,18 +1,4 @@
 {
   "mode": "pre",
-  "tag": "alpha",
-  "initialVersions": {
-    "@nestm/crypto": "0.1.0-alpha.0"
-  },
-  "changesets": [
-    "app-owned-storage-composition",
-    "azure-wrapping-context-fail-closed",
-    "fresh-only-key-wrappers",
-    "initial-crypto-release",
-    "protected-storage-workspaces",
-    "quiet-wrappers-simplify",
-    "recipient-addressed-seal",
-    "secure-field-adapters",
-    "stream-encrypted-files"
-  ]
+  "tag": "alpha"
 }
