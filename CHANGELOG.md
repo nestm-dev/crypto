@@ -1,5 +1,11 @@
 # @nestm/crypto
 
+## 0.1.0-alpha.8
+
+### Patch Changes
+
+- da4a29e: Target stable NestJS 12 peer ranges and refresh the supported dependency toolchain.
+
 ## 0.1.0-alpha.7
 
 ### Minor Changes
