@@ -185,7 +185,7 @@
 	},
 	"devDependencies": {
 		"@arethetypeswrong/cli": "0.18.5",
-		"@aws-sdk/client-kms": "3.1120.0",
+		"@aws-sdk/client-kms": "3.1125.0",
 		"@azure/core-auth": "1.11.0",
 		"@azure/keyvault-keys": "4.10.2",
 		"@changesets/cli": "3.0.1",
