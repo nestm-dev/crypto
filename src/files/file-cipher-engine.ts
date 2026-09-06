@@ -971,7 +971,14 @@ export class FileCipherEngine {
 			);
 			void pending
 				.then(async (late) => {
-					if (signal.aborted) await sourceReader(late).cancel(signal.reason);
+					if (signal.aborted) {
+						const reader = sourceReader(late);
+						try {
+							await reader.cancel(signal.reason);
+						} finally {
+							reader.release();
+						}
+					}
 				})
 				.catch(() => undefined);
 			const bytes = await abortable(pending, signal);

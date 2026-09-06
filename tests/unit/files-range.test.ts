@@ -233,4 +233,31 @@ describe("authenticated NMF1 ranges", () => {
 			await f.engine.close();
 		}
 	});
+
+	it("cancels and releases a byte source arriving after caller cancellation", async () => {
+		const f = await fixture(40);
+		const controller = new AbortController();
+		let deliver!: (value: ReadableStream<Uint8Array>) => void;
+		const pending = f.engine.decryptRange(
+			() =>
+				new Promise((resolve) => {
+					deliver = resolve;
+				}),
+			{ ...f.input, signal: controller.signal },
+		);
+		const rejected = expect(pending).rejects.toBeDefined();
+		controller.abort();
+		await rejected;
+		let cancelled = false;
+		const late = new ReadableStream<Uint8Array>({
+			cancel() {
+				cancelled = true;
+			},
+		});
+		deliver(late);
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		expect(cancelled).toBe(true);
+		expect(late.locked).toBe(false);
+		await f.engine.close();
+	});
 });
