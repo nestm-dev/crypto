@@ -48,11 +48,13 @@ export type {
 	FileByteSource,
 	FileCipherEngineOptions,
 	FileDecryptInput,
+	FileDecryptRangeInput,
 	FileDecryptResult,
 	FileDecryptionSummary,
 	FileEncryptInput,
 	FileEncryptionSummary,
 	FileEncryptResult,
 	FileHeaderInfo,
+	FileRangeSource,
 	FileSizeOptions,
 } from "./types.js";

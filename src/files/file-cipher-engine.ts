@@ -48,11 +48,13 @@ import type {
 	FileByteSource,
 	FileCipherEngineOptions,
 	FileDecryptInput,
+	FileDecryptRangeInput,
 	FileDecryptResult,
 	FileEncryptionSummary,
 	FileEncryptInput,
 	FileEncryptResult,
 	FileHeaderInfo,
+	FileRangeSource,
 	FileSizeOptions,
 } from "./types.js";
 
@@ -897,6 +899,220 @@ export class FileCipherEngine {
 			await operation.cancel(error);
 			this.#finishOperation(operation);
 			throw error;
+		}
+	}
+
+	/**
+	 * Verify a bounded range without reading unrelated data frames. The source must
+	 * honor ranges against one exact immutable object. This verifies selected data,
+	 * the authenticated total length, and physical EOF; it is not a whole-file digest check.
+	 */
+	async decryptRange(source: FileRangeSource, input: FileDecryptRangeInput): Promise<Uint8Array> {
+		this.#assertOpen();
+		if (typeof source !== "function" || typeof input !== "object" || input === null) {
+			throw new CryptoError("INVALID_ARGUMENT", "A file range source and input are required.");
+		}
+		const size = validateExpectedSize(
+			input.expectedPlaintextBytes,
+			"The expected plaintext length",
+		);
+		const ciphertextSize = validateExpectedSize(
+			input.expectedCiphertextBytes,
+			"The expected ciphertext length",
+		);
+		const offset = input.offset;
+		const length = input.length;
+		if (
+			size === undefined ||
+			ciphertextSize === undefined ||
+			typeof offset !== "bigint" ||
+			offset < 0n ||
+			!Number.isSafeInteger(length) ||
+			length < 0 ||
+			!Number.isSafeInteger(input.maxRangeBytes) ||
+			input.maxRangeBytes < 1 ||
+			length > input.maxRangeBytes ||
+			offset + BigInt(length) > size
+		) {
+			throw new CryptoError(
+				"INVALID_ARGUMENT",
+				"The requested plaintext range is invalid or exceeds its byte budget.",
+			);
+		}
+		assertNmf1PlaintextLimit(size, this.#maxPlaintextBytes);
+		if (ciphertextSize !== nmf1EncryptedFileSize(size)) throw authenticationFailed();
+		const aad = captureFileAad(input.aad);
+		const expectedHeader = copyFileBytes(input.expectedHeaderBytes, "Expected NMF1 header");
+		const detached = captureDetachedKey(input.detachedKey);
+		const allowed = input.allowedProviders;
+		if (
+			expectedHeader.byteLength !== NMF1_HEADER_BYTES ||
+			!Array.isArray(allowed) ||
+			allowed.length === 0 ||
+			allowed.some((name) => !validIdentifier(name, MAX_PROVIDER_NAME_BYTES))
+		) {
+			aad.fill(0);
+			expectedHeader.fill(0);
+			detached.wrappedKey.fill(0);
+			throw new CryptoError(
+				"INVALID_ARGUMENT",
+				"An exact header and allowed file providers are required.",
+			);
+		}
+		const allowedProviders = new Set(allowed);
+		const operation = this.#beginOperation(input.signal);
+		const signal = operation.controller.signal;
+		let output: Uint8Array | undefined;
+		let header: Uint8Array | undefined;
+		const read = async (start: bigint, count: number, tail = false): Promise<Uint8Array> => {
+			throwIfAborted(signal);
+			const pending = Promise.resolve(
+				source(tail ? { start } : { start, end: start + BigInt(count) - 1n }, signal),
+			);
+			void pending
+				.then(async (late) => {
+					if (signal.aborted) {
+						const reader = sourceReader(late);
+						try {
+							await reader.cancel(signal.reason);
+						} finally {
+							reader.release();
+						}
+					}
+				})
+				.catch(() => undefined);
+			const bytes = await abortable(pending, signal);
+			throwIfAborted(signal);
+			const cursor = new SourceCursor(sourceReader(bytes));
+			operation.bindCursor(cursor);
+			try {
+				const value = await cursor.exact(count, signal);
+				try {
+					await cursor.requirePhysicalEof(signal);
+					return value;
+				} catch (error: unknown) {
+					value.fill(0);
+					throw error;
+				}
+			} catch (error: unknown) {
+				await cursor.cancel(error);
+				throw error;
+			} finally {
+				cursor.release();
+			}
+		};
+		try {
+			header = await read(0n, NMF1_HEADER_BYTES);
+			if (!equalFileBytes(header, expectedHeader)) throw authenticationFailed();
+			const inspected = parseFileHeader(header);
+			assertFileContext(inspected, aad);
+			if (!allowedProviders.has(detached.provider)) {
+				throw new CryptoError(
+					"PROVIDER_NOT_FOUND",
+					"The detached file-key provider is not allowed.",
+				);
+			}
+			const provider = this.#providers.get(detached.provider);
+			if (provider === undefined)
+				throw new CryptoError(
+					"PROVIDER_NOT_FOUND",
+					"The detached file-key provider was not found.",
+				);
+			const context = providerWrappingContext(aad, header);
+			let key: KeyObject;
+			try {
+				key = await providerCall(
+					async () =>
+						captureUnwrappedDataKey(
+							await provider.unwrapDataKey(
+								{
+									wrappedKey: new Uint8Array(detached.wrappedKey),
+									keyReference: detached.keyReference,
+									wrappingAlgorithm: detached.wrappingAlgorithm,
+								},
+								{ wrappingContext: context, signal },
+							),
+						),
+					signal,
+				);
+			} finally {
+				context.fill(0);
+			}
+			const chunk = BigInt(NMF1_CHUNK_BYTES);
+			const frameCount = Number((size + chunk - 1n) / chunk);
+			const finalSize = NMF1_FINAL_FRAME_HEADER_BYTES + NMF1_TAG_BYTES;
+			const final = await read(ciphertextSize - BigInt(finalSize), finalSize, true);
+			try {
+				const finalHeader = final.subarray(0, NMF1_FINAL_FRAME_HEADER_BYTES);
+				const totals = parseFinalFrameHeader(finalHeader);
+				if (totals.dataFrameCount !== frameCount || totals.totalPlaintextLength !== size)
+					throw authenticationFailed();
+				cipher
+					.decrypt({
+						ciphertext: new Uint8Array(),
+						key,
+						nonce: frameNonce(inspected.noncePrefix, frameCount),
+						tag: final.subarray(NMF1_FINAL_FRAME_HEADER_BYTES),
+						aad: frameAuthenticatedData(header, aad, finalHeader),
+					})
+					.fill(0);
+			} finally {
+				final.fill(0);
+			}
+			output = new Uint8Array(length);
+			if (length > 0) {
+				const first = Number(offset / chunk);
+				const last = Number((offset + BigInt(length) - 1n) / chunk);
+				let copied = 0;
+				for (let index = first; index <= last; index += 1) {
+					const plaintextStart = BigInt(index) * chunk;
+					const frameLength = Number(size - plaintextStart < chunk ? size - plaintextStart : chunk);
+					const bodyStart =
+						BigInt(NMF1_HEADER_BYTES) +
+						BigInt(index) *
+							BigInt(NMF1_CHUNK_BYTES + NMF1_DATA_FRAME_HEADER_BYTES + NMF1_TAG_BYTES);
+					const frame = await read(
+						bodyStart,
+						NMF1_DATA_FRAME_HEADER_BYTES + frameLength + NMF1_TAG_BYTES,
+					);
+					let plaintext: Uint8Array | undefined;
+					try {
+						const frameHeader = frame.subarray(0, NMF1_DATA_FRAME_HEADER_BYTES);
+						const parsed = parseDataFrameHeader(frameHeader);
+						if (parsed.frameIndex !== index || parsed.plaintextLength !== frameLength)
+							throw authenticationFailed();
+						plaintext = cipher.decrypt({
+							ciphertext: frame.subarray(
+								NMF1_DATA_FRAME_HEADER_BYTES,
+								NMF1_DATA_FRAME_HEADER_BYTES + frameLength,
+							),
+							key,
+							nonce: frameNonce(inspected.noncePrefix, index),
+							tag: frame.subarray(NMF1_DATA_FRAME_HEADER_BYTES + frameLength),
+							aad: frameAuthenticatedData(header, aad, frameHeader),
+						});
+						const from = Number(offset > plaintextStart ? offset - plaintextStart : 0n);
+						const take = Math.min(frameLength - from, length - copied);
+						output.set(plaintext.subarray(from, from + take), copied);
+						copied += take;
+					} finally {
+						plaintext?.fill(0);
+						frame.fill(0);
+					}
+				}
+			}
+			throwIfAborted(signal);
+			return output;
+		} catch (error: unknown) {
+			output?.fill(0);
+			await operation.cancel(error);
+			throw normalizeSourceError(error);
+		} finally {
+			aad.fill(0);
+			expectedHeader.fill(0);
+			detached.wrappedKey.fill(0);
+			header?.fill(0);
+			this.#finishOperation(operation);
 		}
 	}
 

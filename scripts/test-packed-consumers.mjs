@@ -195,6 +195,8 @@ function testIntegrationConsumer(tarball) {
 			'const decryptedFile = await fileEngine.decrypt((async function* () { yield encryptedFileBytes; })(), { aad: fileAad, detachedKey: encryptedFile.detachedKey, allowedProviders: ["packed-file"], expectedHeaderBytes: encryptedFile.headerBytes });',
 			'assert.equal(new TextDecoder().decode(await new Response(decryptedFile.plaintext).arrayBuffer()), "packed file");',
 			"await decryptedFile.verification;",
+			'const fileRange = await fileEngine.decryptRange(async (range) => (async function* () { yield encryptedFileBytes.slice(Number(range.start), range.end === undefined ? undefined : Number(range.end + 1n)); })(), { aad: fileAad, detachedKey: encryptedFile.detachedKey, allowedProviders: ["packed-file"], expectedHeaderBytes: encryptedFile.headerBytes, expectedPlaintextBytes: 11n, expectedCiphertextBytes: BigInt(encryptedFileBytes.byteLength), offset: 7n, length: 4, maxRangeBytes: 4 });',
+			'assert.equal(new TextDecoder().decode(fileRange), "file");',
 			"await fileEngine.close();",
 			"await moduleRef.close();",
 			'let activeTenantId = "tenant-a";',

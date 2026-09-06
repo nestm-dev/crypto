@@ -179,6 +179,41 @@ An authenticated full frame may be emitted before a later frame or EOF fails. A 
 that authenticated prefix and abort on failure, but agents, previews, archive/skill validation, and
 other side-effecting consumers must stage all plaintext until `verification` resolves.
 
+For bounded text windows and search, `decryptRange()` reads only the pinned header, the final
+authenticated frame through physical EOF, and data frames overlapping the requested plaintext range.
+The host must pin **every** callback read to one exact immutable object, for example by a conditional
+storage ETag. Ciphertext byte ranges are inclusive; an omitted `end` means read through physical EOF.
+
+```ts
+import type { FileRangeSource } from "@nestm/crypto/files";
+
+declare const readExactObjectRange: FileRangeSource;
+declare const stored: {
+	detachedKey: import("@nestm/crypto/files").DetachedFileKey;
+	headerBytes: Uint8Array;
+	plaintextBytes: bigint;
+	ciphertextBytes: bigint;
+};
+const window = await files.decryptRange(readExactObjectRange, {
+	aad: canonicalFileAad,
+	detachedKey: stored.detachedKey,
+	allowedProviders: ["workspace"],
+	expectedHeaderBytes: stored.headerBytes,
+	expectedPlaintextBytes: stored.plaintextBytes,
+	expectedCiphertextBytes: stored.ciphertextBytes,
+	offset: 4096n,
+	length: 4096,
+	maxRangeBytes: 4096,
+});
+```
+
+The method returns bytes only after the selected frames and final totals authenticate. It does not
+authenticate unread data frames or verify a whole-object SHA-256; use full `decrypt()` and its
+`verification` promise for that. The NMF1 format is unchanged. Memory is bounded by the requested
+range budget, one authenticated frame, and the largest source yield; the host should retain the
+same bounded source-yield policy as full streaming reads. Empty ranges at or before EOF also verify
+the header and final frame, including an empty file.
+
 ## Operations
 
 Both `CipherService` and `CipherEngine` provide:
