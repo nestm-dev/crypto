@@ -40,6 +40,26 @@ export interface FileDecryptInput {
 	readonly signal?: AbortSignal;
 }
 
+/** The host pins every read to the same immutable object/version. End is inclusive. */
+export type FileRangeSource = (
+	range: Readonly<{ start: bigint; end?: bigint }>,
+	signal: AbortSignal,
+) => Promise<FileByteSource>;
+
+/** Bounded plaintext range; authenticates selected frames and the complete-file terminator. */
+export interface FileDecryptRangeInput {
+	readonly aad: Uint8Array;
+	readonly detachedKey: DetachedFileKey;
+	readonly allowedProviders: readonly string[];
+	readonly expectedHeaderBytes: Uint8Array;
+	readonly expectedPlaintextBytes: bigint;
+	readonly expectedCiphertextBytes: bigint;
+	readonly offset: bigint;
+	readonly length: number;
+	readonly maxRangeBytes: number;
+	readonly signal?: AbortSignal;
+}
+
 export interface FileHeaderInfo {
 	readonly format: "NMF1";
 	readonly version: 1;
