@@ -1,5 +1,11 @@
 # @nestm/crypto
 
+## 0.1.0-alpha.9
+
+### Patch Changes
+
+- b6ef6c2: Add bounded authenticated NMF1 plaintext range reads over an immutable-object range source. Range reads authenticate the pinned header, selected frames and final totals/EOF without decrypting unrelated file contents.
+
 ## 0.1.0-alpha.8
 
 ### Patch Changes
