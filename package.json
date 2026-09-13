@@ -185,11 +185,11 @@
 	},
 	"devDependencies": {
 		"@arethetypeswrong/cli": "0.18.5",
-		"@aws-sdk/client-kms": "3.1120.0",
+		"@aws-sdk/client-kms": "3.1129.0",
 		"@azure/core-auth": "1.11.0",
 		"@azure/keyvault-keys": "4.10.2",
 		"@changesets/cli": "3.0.1",
-		"@google-cloud/kms": "6.0.0",
+		"@google-cloud/kms": "6.1.0",
 		"@nestm/tenant": "0.1.0-alpha.8",
 		"@nestjs/common": "12.0.1",
 		"@nestjs/core": "12.0.1",
